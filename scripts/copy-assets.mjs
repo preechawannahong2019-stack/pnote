@@ -16,6 +16,7 @@ const copies = [
   ['tesseract.js-core', 'tesseract/core', (p) => /-lstm\.wasm\.js$/.test(p) || p === '/LICENSE' || p === ''],
   ['@tesseract.js-data/tha/4.0.0_best_int/tha.traineddata.gz', 'tesseract/lang/tha.traineddata.gz'],
   ['@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz', 'tesseract/lang/eng.traineddata.gz'],
+  ['@fontsource/sarabun/files', 'fonts', (p) => p === '' || /^\/sarabun-(thai|latin)-(400|700)-normal\.woff$/.test(p)],
 ];
 for (const [from, to, filter] of copies) {
   const src = join(nm, from);
