@@ -36,26 +36,28 @@ public enum CaptureRender {
         return data as Data
     }
 
-    /// Full-page PNG, capped at 16,384 pt tall, snapshotted in 2,048 pt tiles and stitched.
+    /// Full-page PNG, capped at 16,384 pt tall. WebKit paints only what is on screen, so the page is scrolled one
+    /// viewport at a time, each viewport snapshotted, and the pieces stitched (fixed headers repeat in each piece).
     @MainActor
     public static func screenshot(of web: WKWebView) async throws -> Data {
-        let width = web.scrollView.contentSize.width
+        let width = web.bounds.width
+        let viewport = max(1, web.bounds.height)
         let height = CaptureLimits.clampHeight(web.scrollView.contentSize.height)
-        // WebKit paints only what lies inside the view's bounds: grow the view to the whole page while snapshotting
-        let savedFrame = web.frame
-        let savedOffset = web.scrollView.contentOffset
-        web.frame = CGRect(origin: savedFrame.origin, size: CGSize(width: savedFrame.width, height: height))
-        web.scrollView.contentOffset = .zero
-        defer { web.frame = savedFrame; web.scrollView.contentOffset = savedOffset }
-        web.layoutIfNeeded()
-        var tiles: [(CGFloat, UIImage)] = []
+        let scroll = web.scrollView
+        let savedOffset = scroll.contentOffset
+        let savedInsets = scroll.contentInsetAdjustmentBehavior
+        scroll.contentInsetAdjustmentBehavior = .never
+        defer { scroll.contentInsetAdjustmentBehavior = savedInsets; scroll.contentOffset = savedOffset }
+        var tiles: [(CGFloat, CGFloat, UIImage)] = []
         var y: CGFloat = 0
         while y < height {
-            let h = min(CaptureLimits.tile, height - y)
+            let h = min(viewport, height - y)
+            scroll.setContentOffset(CGPoint(x: 0, y: min(y, max(0, scroll.contentSize.height - viewport))), animated: false)
+            let shown = scroll.contentOffset.y // the last piece may sit higher than y when the page ends
             let cfg = WKSnapshotConfiguration()
-            cfg.rect = CGRect(x: 0, y: y, width: width, height: h)
+            cfg.rect = CGRect(x: 0, y: y - shown, width: width, height: h) // view coordinates
             cfg.afterScreenUpdates = true
-            tiles.append((y, try await web.takeSnapshot(configuration: cfg)))
+            tiles.append((y, h, try await web.takeSnapshot(configuration: cfg)))
             y += h
         }
         let format = UIGraphicsImageRendererFormat()
@@ -63,7 +65,7 @@ public enum CaptureRender {
         let image = UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format).image { ctx in
             UIColor.white.setFill()
             ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
-            for (top, img) in tiles { img.draw(in: CGRect(x: 0, y: top, width: width, height: img.size.height)) }
+            for (top, h, img) in tiles { img.draw(in: CGRect(x: 0, y: top, width: width, height: h)) }
         }
         guard let png = image.pngData() else { throw NSError(domain: "PnoteCapture", code: 1) }
         return png
