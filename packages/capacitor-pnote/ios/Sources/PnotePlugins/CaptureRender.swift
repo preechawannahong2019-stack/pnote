@@ -41,6 +41,13 @@ public enum CaptureRender {
     public static func screenshot(of web: WKWebView) async throws -> Data {
         let width = web.scrollView.contentSize.width
         let height = CaptureLimits.clampHeight(web.scrollView.contentSize.height)
+        // WebKit paints only what lies inside the view's bounds: grow the view to the whole page while snapshotting
+        let savedFrame = web.frame
+        let savedOffset = web.scrollView.contentOffset
+        web.frame = CGRect(origin: savedFrame.origin, size: CGSize(width: savedFrame.width, height: height))
+        web.scrollView.contentOffset = .zero
+        defer { web.frame = savedFrame; web.scrollView.contentOffset = savedOffset }
+        web.layoutIfNeeded()
         var tiles: [(CGFloat, UIImage)] = []
         var y: CGFloat = 0
         while y < height {
