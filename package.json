@@ -12,7 +12,8 @@
     "build": "node scripts/copy-assets.mjs && npm run build -w apps/web",
     "e2e": "playwright test -c apps/web",
     "check:no-external": "node scripts/check-no-external.mjs",
-    "postinstall": "node scripts/copy-assets.mjs"
+    "postinstall": "node scripts/copy-assets.mjs",
+    "build:mobile": "npm run build && cd apps/mobile && npx cap sync"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

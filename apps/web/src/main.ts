@@ -1,6 +1,5 @@
 import { mount } from 'svelte';
-import { IndexedDbAdapter } from '@pnote/storage/idb-adapter';
-import { WebNoDeviceKey } from '@pnote/storage/device-key';
+import { createPlatformServices } from './platform';
 import App from './App.svelte';
 import '@fontsource/sarabun/thai-400.css';
 import '@fontsource/sarabun/thai-700.css';
@@ -24,7 +23,8 @@ async function askPersist(): Promise<void> {
   }
 }
 
-mount(App, {
-  target: document.getElementById('app')!,
-  props: { adapter: new IndexedDbAdapter('pnote'), device: WebNoDeviceKey, onFirstUnlock: () => void askPersist() },
-});
+void createPlatformServices().then((services) =>
+  mount(App, {
+    target: document.getElementById('app')!,
+    props: { adapter: services.adapter, device: services.device, onFirstUnlock: () => { if (services.kind === 'web') void askPersist(); } },
+  }));

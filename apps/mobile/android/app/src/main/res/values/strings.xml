@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">PNote</string>
+    <string name="title_activity_main">PNote</string>
+    <string name="package_name">app.pnote.notes</string>
+    <string name="custom_url_scheme">app.pnote.notes</string>
+</resources>
