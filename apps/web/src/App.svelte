@@ -9,6 +9,7 @@
   import Recover from './screens/Recover.svelte';
   import Library from './screens/Library.svelte';
   import { createIdleLock, DEFAULT_IDLE_MS } from './lib/idle-lock';
+  import { bindIdleLock, getLifecycle } from './platform/lifecycle';
 
   type Ok = Extract<UnlockResult, { ok: true }>;
   let { adapter, device, idleMs = DEFAULT_IDLE_MS, onFirstUnlock }: {
@@ -36,7 +37,8 @@
   $effect(() => {
     if (view !== 'library') return;
     const l = createIdleLock(idleMs, lock);
-    return () => l.dispose();
+    const off = bindIdleLock(getLifecycle(), l);
+    return () => { off(); l.dispose(); };
   });
 </script>
 

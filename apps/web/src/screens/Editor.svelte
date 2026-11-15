@@ -10,6 +10,7 @@
   import PageNavigator from '../components/PageNavigator.svelte';
   import TextBoxEditor from '../components/TextBoxEditor.svelte';
   import { PageSources, backgroundFor } from '../lib/page-sources';
+  import { bindSession, getLifecycle } from '../platform/lifecycle';
   import { OcrQueue } from '@pnote/pdf/ocr-queue';
   import { createTesseractEngine } from '@pnote/pdf/ocr';
   import { searchPage } from '@pnote/pdf/search';
@@ -125,6 +126,7 @@
     mode = ctrl.mode; tool = ctrl.tool; style = { ...ctrl.style };
   }
 
+  let offLifecycle: (() => void) | null = null;
   let openError = $state('');
   let saveError = $state(false);
   let auditBroken = $state(false);
@@ -134,6 +136,7 @@
     let s: EditorSession;
     try {
       s = await EditorSession.open(lib, author, docId);
+      offLifecycle = bindSession(getLifecycle(), s);
     } catch {
       openError = 'เปิดเอกสารไม่สำเร็จ ไฟล์อาจเสียหายหรือถูกแก้ไข';
       return;
@@ -416,7 +419,7 @@
   }
 
   async function close() { await session?.close(); onClose(); }
-  onDestroy(() => { destroyed = true; if (raf) cancelAnimationFrame(raf); if (bgTimer) clearTimeout(bgTimer); void ocr?.stop(); void session?.close(); void sources?.destroy(); });
+  onDestroy(() => { offLifecycle?.(); destroyed = true; if (raf) cancelAnimationFrame(raf); if (bgTimer) clearTimeout(bgTimer); void ocr?.stop(); void session?.close(); void sources?.destroy(); });
 </script>
 
 <svelte:window onkeydown={onKey} />

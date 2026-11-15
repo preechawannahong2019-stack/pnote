@@ -1,6 +1,7 @@
 import type { StorageAdapter } from '@pnote/storage/adapter';
 import { WebNoDeviceKey, type DeviceKeyProvider } from '@pnote/storage/device-key';
 import { IndexedDbAdapter } from '@pnote/storage/idb-adapter';
+import { setLifecycle, webLifecycle, type Lifecycle } from './lifecycle';
 
 export type PlatformKind = 'web' | 'android' | 'ios';
 
@@ -17,10 +18,13 @@ export interface PlatformServices {
   kind: PlatformKind;
   adapter: StorageAdapter;
   device: DeviceKeyProvider;
+  lifecycle: Lifecycle;
 }
 
 export async function createPlatformServices(kind: PlatformKind = platformKind()): Promise<PlatformServices> {
-  if (kind === 'web') return { kind, adapter: new IndexedDbAdapter('pnote'), device: WebNoDeviceKey };
-  const native = await import('./native');
-  return native.createNativeServices(kind);
+  const services = kind === 'web'
+    ? { kind, adapter: new IndexedDbAdapter('pnote'), device: WebNoDeviceKey, lifecycle: webLifecycle() }
+    : await (await import('./native')).createNativeServices(kind);
+  setLifecycle(services.lifecycle);
+  return services;
 }
