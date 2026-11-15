@@ -13,7 +13,7 @@ const copies = [
   ['pdfjs-dist/standard_fonts', 'pdfjs/standard_fonts'],
   ['pdfjs-dist/wasm', 'pdfjs/wasm'],
   ['tesseract.js/dist/worker.min.js', 'tesseract/worker.min.js'],
-  ['tesseract.js-core', 'tesseract/core', (p) => /tesseract-core.*\.(js|wasm)$/.test(p) || !p.includes('.')],
+  ['tesseract.js-core', 'tesseract/core', (p) => /-lstm\.wasm\.js$/.test(p) || p === '/LICENSE' || p === ''],
   ['@tesseract.js-data/tha/4.0.0_best_int/tha.traineddata.gz', 'tesseract/lang/tha.traineddata.gz'],
   ['@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz', 'tesseract/lang/eng.traineddata.gz'],
 ];

@@ -100,3 +100,8 @@ export interface Folder { id: Id; profileId: Id; parentId: Id | null; name: stri
 export interface PenPreset { id: Id; name: string; tool: Tool; style: PenStyle }
 
 export const A4 = { widthPt: 595.28, heightPt: 841.89 } as const;
+
+/** A recognized word in page space (pt). */
+export interface OcrWord { text: string; bbox: [number, number, number, number]; conf: number }
+/** Searchable text of one page: from the PDF's own text or from OCR. */
+export interface OcrPage { pageId: Id; engine: 'tesseract' | 'pdf-text'; lang: 'tha+eng'; words: OcrWord[]; doneAt: number }

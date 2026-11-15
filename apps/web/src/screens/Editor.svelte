@@ -10,6 +10,8 @@
   import PageNavigator from '../components/PageNavigator.svelte';
   import TextBoxEditor from '../components/TextBoxEditor.svelte';
   import { PageSources } from '../lib/page-sources';
+  import { OcrQueue } from '@pnote/pdf/ocr-queue';
+  import { createTesseractEngine } from '@pnote/pdf/ocr';
   import type { TextValue } from '../lib/editor-controller';
   import Toolbar from '../components/Toolbar.svelte';
   import PageStrip from '../components/PageStrip.svelte';
@@ -28,6 +30,19 @@
   let bgTimer: ReturnType<typeof setTimeout> | null = null;
   let textReq = $state<{ pageId: Id; x: number; y: number; existing?: TextBox } | null>(null);
   let viewSnap = $state({ scale: 1, offsetX: 0, offsetY: 0 });
+  let ocr: OcrQueue | null = null;
+  let ocrProgress = $state<{ done: number; total: number } | null>(null);
+
+  function startOcr(s: EditorSession, src: PageSources) {
+    ocr = new OcrQueue({
+      lib, docId: s.meta.id, pages: s.meta.pages,
+      render: (pg, px) => src.background(pg, px),
+      pdfWords: async (n) => (await (await src.pdfDoc()).pageWords(n)).map((w) => ({ ...w, conf: 100 })),
+      engine: () => createTesseractEngine({ workerPath: './vendor/tesseract/worker.min.js', corePath: './vendor/tesseract/core', langPath: './vendor/tesseract/lang' }),
+    });
+    ocr.onProgress((done, total) => { ocrProgress = total && done < total ? { done, total } : null; });
+    ocr.start();
+  }
 
   let session = $state<EditorSession | null>(null);
   let ctrl: EditorController | null = null;
@@ -75,7 +90,10 @@
     ctrl = new EditorController(s, { scribbleToErase: settings.scribble, autoShapes: settings.autoShapes });
     router = new InputRouter(ctrl.mode);
     ctrl.onTextRequest = (r) => { viewSnap = { ...view }; textReq = r; };
-    if (blobs && s.meta.kind !== 'notebook') sources = new PageSources(s.meta, blobs);
+    if (blobs && s.meta.kind !== 'notebook') {
+      sources = new PageSources(s.meta, blobs);
+      if (!s.readOnly) startOcr(s, sources);
+    }
     s.history.onChange(() => { version++; plan.markBase(); requestRender(); });
     s.onSaveError(() => { saveError = true; });
     auditBroken = s.auditBroken;
@@ -311,7 +329,7 @@
   }
 
   async function close() { await session?.close(); onClose(); }
-  onDestroy(() => { destroyed = true; if (raf) cancelAnimationFrame(raf); if (bgTimer) clearTimeout(bgTimer); void session?.close(); void sources?.destroy(); });
+  onDestroy(() => { destroyed = true; if (raf) cancelAnimationFrame(raf); if (bgTimer) clearTimeout(bgTimer); void ocr?.stop(); void session?.close(); void sources?.destroy(); });
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -329,6 +347,7 @@
     />
     {#if session.readOnly}<div class="ro" role="status">{READ_ONLY_MESSAGE}</div>{/if}
     {#if saveError && version >= 0 && session.saveFailed}<div class="ro err" role="alert">บันทึกไม่สำเร็จ กำลังลองใหม่ — อย่าปิดแอป</div>{/if}
+    {#if ocrProgress}<div class="chip" role="status">กำลังอ่านข้อความ {ocrProgress.done}/{ocrProgress.total}</div>{/if}
     {#if auditBroken}<div class="ro err" role="alert">ประวัติการแก้ไขของเอกสารนี้ไม่ต่อเนื่อง อาจถูกแก้ไขจากภายนอก</div>{/if}
   {:else if openError}
     <div class="screen open-error">
@@ -359,6 +378,7 @@
   .editor { position: fixed; inset: 0; background: #dfe3ea; overflow: hidden; }
   .canvas-host { position: absolute; inset: 0; touch-action: none; user-select: none; -webkit-user-select: none; }
   .layer { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .chip { position: absolute; bottom: 60px; right: 12px; z-index: 11; background: #ffffffee; padding: 4px 10px; border-radius: 999px; font-size: 13px; box-shadow: 0 1px 4px #0002; }
   .open-error { position: relative; z-index: 12; }
   .err { background: #fde2e1 !important; color: #8c1d18; top: 96px !important; }
   .ro { position: absolute; top: 56px; left: 50%; transform: translateX(-50%); z-index: 11; background: #fff4d6; padding: 6px 12px; border-radius: 8px; }

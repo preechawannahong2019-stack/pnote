@@ -2,7 +2,7 @@ import { appendAudit, verifyAudit, type AuditEntry } from '@pnote/core/audit';
 import type { DocState } from '@pnote/core/doc-state';
 import { newId } from '@pnote/core/ids';
 import { decodePage, encodePage } from '@pnote/core/serialize';
-import { A4, type Author, type DocumentMeta, type Folder, type Id, type PageRef, type PageTemplate, type PenPreset } from '@pnote/core/types';
+import { A4, type Author, type DocumentMeta, type Folder, type Id, type OcrPage, type PageRef, type PageTemplate, type PenPreset } from '@pnote/core/types';
 import type { EncryptedStore } from './encrypted-store';
 
 export class FolderNotEmptyError extends Error {
@@ -79,6 +79,20 @@ export class Library {
       removed++;
     }
     return removed;
+  }
+
+  getTextLayer(docId: Id, pageId: Id): Promise<OcrPage | null> {
+    return this.store.getJSON<OcrPage>(`${docDir(docId)}/text/${pageId}.json`);
+  }
+
+  putTextLayer(docId: Id, layer: OcrPage): Promise<void> {
+    return this.store.putJSON(`${docDir(docId)}/text/${layer.pageId}.json`, layer);
+  }
+
+  /** Page ids of a document that already have a text layer. */
+  async textLayerIds(docId: Id): Promise<Set<Id>> {
+    const prefix = `${docDir(docId)}/text/`;
+    return new Set((await this.store.list(prefix)).map((p) => p.slice(prefix.length, -'.json'.length)));
   }
 
   listFolders(): Promise<Folder[]> { return this.folders(); }
