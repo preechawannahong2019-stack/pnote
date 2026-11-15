@@ -17,7 +17,7 @@ const box = (text: string): TextBox => ({ id: 't', pageId: 'p', x: 5, y: 5, w: 5
 describe('normalizeForSearch', () => {
   it('drops spaces OCR puts between Thai characters', () => expect(n('ผู้ ต้อง หา')).toBe(n('ผู้ต้องหา')));
   it('treats nikhahit + sara aa as sara am', () => expect(n('นํ้า')).toBe(n('น้ำ')));
-  it('removes zero-width characters', () => expect(n('คดี​ที่')).toBe(n('คดีที่')));
+  it('removes zero-width characters', () => expect(n(`คดี${String.fromCharCode(0x200b)}ที่`)).toBe(n('คดีที่')));
   it('maps Thai digits to Arabic', () => expect(n('๒๕๖๙')).toBe('2569'));
   it('keeps English words spaced and lowercases', () => expect(n('  EVIDENCE   2569 ')).toBe('evidence 2569'));
 });

@@ -2,17 +2,25 @@ import type { DocumentMeta, Id, OcrPage, TextBox } from '@pnote/core/types';
 import type { Library } from '@pnote/storage/library';
 
 type Rect = [number, number, number, number];
-const THAI = /[\u0E00-\u0E7F]/;
+const THAI = new RegExp(`[${String.fromCharCode(0x0e00)}-${String.fromCharCode(0x0e7f)}]`);
+
+const ch = (c: number) => String.fromCharCode(c);
+const TH = `${ch(0x0e00)}-${ch(0x0e7f)}`;
+const ZERO_WIDTH = new RegExp(`[${ch(0x200b)}-${ch(0x200d)}${ch(0xfeff)}]`, 'g');
+const THAI_DIGIT = new RegExp(`[${ch(0x0e50)}-${ch(0x0e59)}]`, 'g');
+/** nikhahit (+ optional tone mark) + sara aa, as OCR often emits sara am */
+const SARA_AM_SPLIT = new RegExp(`${ch(0x0e4d)}([${ch(0x0e48)}-${ch(0x0e4b)}]?)${ch(0x0e32)}`, 'g');
+const THAI_GAP = new RegExp(`([${TH}])\\s+(?=[${TH}])`, 'g');
 
 /** Normalise text so OCR output and typed queries compare equal. */
 export function normalizeForSearch(s: string): string {
   return s
     .normalize('NFC')
     .toLowerCase()
-    .replace(/[​-‍﻿]/g, '')
-    .replace(/[๐-๙]/g, (d) => String(d.charCodeAt(0) - 0x0e50))
-    .replace(/ํ([่-๋]?)า/g, '$1ำ') // nikhahit (+ tone) + sara aa -> tone + sara am
-    .replace(/([฀-๿])\s+(?=[฀-๿])/g, '$1')
+    .replace(ZERO_WIDTH, '')
+    .replace(THAI_DIGIT, (d) => String(d.charCodeAt(0) - 0x0e50))
+    .replace(SARA_AM_SPLIT, `$1${ch(0x0e33)}`)
+    .replace(THAI_GAP, '$1')
     .replace(/\s+/g, ' ')
     .trim();
 }
