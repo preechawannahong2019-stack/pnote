@@ -115,6 +115,12 @@ function drawTextLayer(page: PDFPage, box: PdfPageBox, layer: OcrPage, f: FontSe
 const fmtTime = (t: number | undefined) => (t ? new Intl.DateTimeFormat('th-TH-u-ca-buddhist', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short' }).format(t) : '-');
 
 /** Rows of the certification page (pure, used by the page and tests). */
+/** A log is continuous only if it is non-empty, starts with the document's creation/import, and its hash chain verifies. */
+export async function auditIntact(audit: AuditEntry[]): Promise<boolean> {
+  if (!audit.length || (audit[0].action !== 'doc.create' && audit[0].action !== 'doc.import')) return false;
+  return (await verifyAudit(audit)).ok;
+}
+
 /** auditOk: result of verifyAudit(input.audit) (async WebCrypto), passed in by the caller. */
 export function certificateLines(input: ExportInput, auditOk: boolean): { label: string; value: string }[] {
   const { meta, audit, state } = input;
@@ -156,8 +162,15 @@ function drawCertificate(doc: PDFDocument, lines: { label: string; value: string
 
 const blankBox = (p: PageRef): PdfPageBox => ({ x: 0, y: 0, w: p.widthPt, h: p.heightPt, rotate: 0 });
 
+export class ExportSourceMissing extends Error {
+  constructor() { super('the original source of this document is missing'); this.name = 'ExportSourceMissing'; }
+}
+
 export async function exportPdf(input: ExportInput, opts: ExportOptions): Promise<Uint8Array> {
   const { meta, state } = input;
+  const needsSource = state.pages.some((p) => p.source.type === 'pdf');
+  const needsImages = state.pages.some((p) => p.source.type === 'image' && !input.images[p.id]);
+  if ((needsSource && !input.source) || needsImages) throw new ExportSourceMissing();
   const doc = await PDFDocument.create();
   doc.registerFontkit(fontkit);
   const regular: FontSet = { thai: await doc.embedFont(input.fonts.thai400, { subset: true }), latin: await doc.embedFont(input.fonts.latin400, { subset: true }) };
@@ -201,8 +214,30 @@ export async function exportPdf(input: ExportInput, opts: ExportOptions): Promis
   }
 
   if (opts.includeCertificate) {
-    const auditOk = (await verifyAudit(input.audit)).ok;
+    const auditOk = await auditIntact(input.audit);
     drawCertificate(doc, certificateLines(input, auditOk), regular, bold);
   }
   return doc.save();
+}
+
+/**
+ * Characters in visible text boxes that neither bundled Sarabun subset (Thai, Latin) can draw.
+ * They would export as empty glyphs, so the export dialog warns about them, per page.
+ */
+export async function missingGlyphs(state: DocState, fonts: ExportFonts): Promise<{ pageIndex: number; chars: string[] }[]> {
+  const faces = [fontkit.create(fonts.thai400 as never), fontkit.create(fonts.latin400 as never)] as unknown as { hasGlyphForCodePoint(cp: number): boolean }[];
+  const out: { pageIndex: number; chars: string[] }[] = [];
+  state.pages.forEach((page, pageIndex) => {
+    const missing = new Set<string>();
+    for (const b of state.textBoxes?.[page.id] ?? []) {
+      if (b.hidden) continue;
+      for (const ch of b.text) {
+        if (/\s/.test(ch)) continue;
+        const cp = ch.codePointAt(0)!;
+        if (!faces.some((f) => f.hasGlyphForCodePoint(cp))) missing.add(ch);
+      }
+    }
+    if (missing.size) out.push({ pageIndex, chars: [...missing] });
+  });
+  return out;
 }

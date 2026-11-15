@@ -1,6 +1,8 @@
 import type { DocumentMeta, PageRef } from '@pnote/core/types';
 import type { PdfjsAssets } from '@pnote/pdf/pdfjs';
-import { PdfDocumentSource } from '@pnote/pdf/pdf-source';
+import { PdfDocumentSource, type RenderPurpose } from '@pnote/pdf/pdf-source';
+
+export const PREFETCH_MAX_WIDTH = 1536;
 import type { BlobStore } from '@pnote/storage/blob-store';
 
 export const PDFJS_ASSETS: PdfjsAssets = {
@@ -51,8 +53,8 @@ export class PageSources {
     }
   }
 
-  async background(page: PageRef, pixelWidth: number): Promise<CanvasImageSource | null> {
-    if (page.source.type === 'pdf') return (await this.pdfDoc()).render(page.source.pageNo, pixelWidth) as Promise<CanvasImageSource>;
+  async background(page: PageRef, pixelWidth: number, purpose: RenderPurpose = 'view'): Promise<CanvasImageSource | null> {
+    if (page.source.type === 'pdf') return (await this.pdfDoc()).render(page.source.pageNo, pixelWidth, purpose) as Promise<CanvasImageSource>;
     if (page.source.type === 'image') return (this.image ??= this.decodeImage());
     return null;
   }
@@ -61,7 +63,8 @@ export class PageSources {
     if (this.meta.kind !== 'pdf') return;
     const nos = this.meta.pages.slice(Math.max(0, index - 2), index + 3)
       .map((p) => (p.source.type === 'pdf' ? p.source.pageNo : 0)).filter(Boolean);
-    (await this.pdfDoc()).prefetch(nos, pixelWidth);
+    // neighbours at a fit-page resolution, not at the current zoom
+    (await this.pdfDoc()).prefetch(nos, Math.min(pixelWidth, PREFETCH_MAX_WIDTH));
   }
 
   async destroy(): Promise<void> {
@@ -69,4 +72,13 @@ export class PageSources {
     const img = await this.image?.catch(() => null);
     if (img && 'close' in img) img.close();
   }
+}
+
+/**
+ * Background to draw for the wanted `pageId:width` key: the current render when it is of the same page
+ * (possibly at the old zoom — blurry beats blank while the sharper one renders), never another page's.
+ */
+export function backgroundFor(current: { key: string; img: CanvasImageSource } | null, want: string): CanvasImageSource | null {
+  if (!current || !want) return null;
+  return current.key.split(':')[0] === want.split(':')[0] ? current.img : null;
 }

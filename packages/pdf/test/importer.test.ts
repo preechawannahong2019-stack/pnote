@@ -6,7 +6,7 @@ import { EncryptedStore } from '@pnote/storage/encrypted-store';
 import { ImportFailed, Importer } from '@pnote/storage/importer';
 import { Library } from '@pnote/storage/library';
 import { readPdfInfo } from '../src/pdf-source';
-import { brokenPdf, croppedPdf, encryptedPdf, notPdf, plainPdf, rotatedPdf } from './fixtures/make-fixtures';
+import { brokenPdf, croppedPdf, encryptedPdf, notPdf, plainPdf, restrictedPdf, rotatedPdf } from './fixtures/make-fixtures';
 
 const author = { profileId: 'p1', name: 'A' };
 const asFile = (b: Uint8Array, name: string, type = 'application/pdf') =>
@@ -15,8 +15,9 @@ const asFile = (b: Uint8Array, name: string, type = 'application/pdf') =>
 async function setup(imageSize = async (_s: BlobSource, _m: string) => ({ w: 1000, h: 500 })) {
   const store = new EncryptedStore(new MemoryAdapter(), await generateDataKey(), 'p1');
   const lib = new Library(store, author, () => 1000);
-  const imp = new Importer(lib, new BlobStore(store), author, { readPdfInfo, imageSize, now: () => 1000 });
-  return { store, lib, imp };
+  const blobs = new BlobStore(store);
+  const imp = new Importer(lib, blobs, author, { readPdfInfo, imageSize, now: () => 1000 });
+  return { store, lib, imp, blobs };
 }
 
 async function expectNothingStored(lib: Library, store: EncryptedStore) {
@@ -56,6 +57,7 @@ describe('Importer.importPdf', () => {
     ['not-pdf', () => notPdf()],
     ['corrupt', () => brokenPdf()],
     ['password', () => encryptedPdf()],
+    ['password', () => restrictedPdf()],
   ] as const)('rejects %s and stores nothing', async (code, make) => {
     const { lib, store, imp } = await setup();
     const err = await imp.importPdf(asFile(await make(), 'x.pdf'), null).catch((e) => e);
@@ -91,5 +93,25 @@ describe('Importer.importImage', () => {
     const err = await imp.importImage(asFile(new Uint8Array([1]), 'p.heic', 'image/heic'), null).catch((e) => e);
     expect(err.code).toBe('unsupported-image');
     await expectNothingStored(lib, store);
+  });
+});
+
+describe('review fixes: cleanup while an import is running', () => {
+  it('cleanupOrphans from another tab does not delete an import in progress', async () => {
+    const { lib, imp, blobs } = await setup();
+    const big = await plainPdf(3, { padBytes: 2_500_000 });
+    let cleaned = -1;
+    const realPut = blobs.put.bind(blobs);
+    vi.spyOn(blobs, 'put').mockImplementation(async (rel, src, mime, onProgress) =>
+      realPut(rel, src, mime, (d, t) => {
+        onProgress?.(d, t);
+        if (d > 0 && d < t && cleaned < 0) cleaned = -2, void lib.cleanupOrphans().then((n) => { cleaned = n; });
+      }));
+    const meta = await imp.importPdf(asFile(big, 'big.pdf'), null);
+    await vi.waitFor(() => expect(cleaned).toBeGreaterThanOrEqual(0));
+    expect(cleaned).toBe(0);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(cleaned).toBe(0);
+    expect(await blobs.verify(`documents/${meta.id}/source`)).toBe(true);
   });
 });

@@ -43,11 +43,29 @@ export async function readPdfInfo(src: BlobSource, assets: PdfjsAssets = {}): Pr
 export interface PdfWord { text: string; bbox: [number, number, number, number] }
 
 type Render = ImageBitmap | HTMLCanvasElement | OffscreenCanvas;
+export type RenderPurpose = 'view' | 'thumb' | 'ocr';
+
+export const MAX_RENDER_WIDTH = 4096;
+export const MAX_RENDER_PIXELS = 16_000_000;
+
+/** Largest render width ≤ pixelWidth that keeps the canvas within 4096 px wide and 16 MP. */
+export function clampRenderWidth(widthPt: number, heightPt: number, pixelWidth: number): number {
+  const ratio = heightPt / widthPt;
+  const byArea = Math.floor(Math.sqrt(MAX_RENDER_PIXELS / ratio));
+  return Math.max(1, Math.min(pixelWidth, MAX_RENDER_WIDTH, byArea));
+}
+
+function free(r: Render): void {
+  if ('close' in r && typeof r.close === 'function') r.close();
+  else { (r as HTMLCanvasElement).width = 0; (r as HTMLCanvasElement).height = 0; }
+}
 
 /** A lazily-read PDF: renders pages and extracts text in page space. */
 export class PdfDocumentSource {
   private cache = new Map<string, Promise<Render>>();
+  private side = new Map<string, Promise<Render>>();
   private static readonly CACHE = 5;
+  private static readonly SIDE_CACHE = 2;
 
   private constructor(private doc: import('./pdfjs').PDFDocumentProxy) {}
 
@@ -77,20 +95,36 @@ export class PdfDocumentSource {
     return out;
   }
 
-  /** Render a page `pixelWidth` wide (bucketed to 256 px); results are cached (LRU of 5). */
-  render(pageNo: number, pixelWidth: number): Promise<Render> {
+  /**
+   * Render a page about `pixelWidth` wide (bucketed to 256 px, clamped to 4096 px / 16 MP so iOS canvases
+   * never go blank). 'view' renders live in an LRU of 5; thumbnails and OCR renders use a separate LRU of 2
+   * so they never evict the page on screen. Evicted canvases are shrunk to free their memory at once.
+   */
+  async render(pageNo: number, pixelWidth: number, purpose: RenderPurpose = 'view'): Promise<Render> {
+    const page = await this.doc.getPage(pageNo);
+    const [x1, y1, x2, y2] = page.view;
+    const turned = ((page as { rotate?: number }).rotate ?? 0) % 180 !== 0;
+    const [wPt, hPt] = turned ? [y2 - y1, x2 - x1] : [x2 - x1, y2 - y1];
     const bucket = Math.max(256, Math.ceil(pixelWidth / 256) * 256);
-    const key = `${pageNo}:${bucket}`;
-    const hit = this.cache.get(key);
+    const width = clampRenderWidth(wPt, hPt, bucket);
+    const cache = purpose === 'view' ? this.cache : this.side;
+    const limit = purpose === 'view' ? PdfDocumentSource.CACHE : PdfDocumentSource.SIDE_CACHE;
+    const key = `${pageNo}:${width}`;
+    const hit = cache.get(key);
     if (hit) {
-      this.cache.delete(key);
-      this.cache.set(key, hit);
+      cache.delete(key);
+      cache.set(key, hit);
       return hit;
     }
-    const p = this.draw(pageNo, bucket);
-    this.cache.set(key, p);
-    p.catch(() => this.cache.delete(key));
-    while (this.cache.size > PdfDocumentSource.CACHE) this.cache.delete(this.cache.keys().next().value!);
+    const p = this.draw(pageNo, width);
+    cache.set(key, p);
+    p.catch(() => cache.delete(key));
+    while (cache.size > limit) {
+      const oldest = cache.keys().next().value!;
+      const evicted = cache.get(oldest);
+      cache.delete(oldest);
+      void evicted?.then(free, () => {});
+    }
     return p;
   }
 
@@ -107,11 +141,11 @@ export class PdfDocumentSource {
   }
 
   prefetch(pageNos: number[], pixelWidth: number): void {
-    for (const n of pageNos) if (n >= 1 && n <= this.pageCount) this.render(n, pixelWidth).catch(() => {});
+    for (const n of pageNos) if (n >= 1 && n <= this.pageCount) this.render(n, pixelWidth, 'view').catch(() => {});
   }
 
   async destroy(): Promise<void> {
-    this.cache.clear();
+    for (const c of [this.cache, this.side]) { for (const p of c.values()) void p.then(free, () => {}); c.clear(); }
     await this.doc.loadingTask.destroy();
   }
 }

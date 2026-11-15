@@ -144,3 +144,40 @@ describe('exportPdf', () => {
     expect((await texts(out, 2)).replace(/\s/g, '')).toContain('สมุดบันทึก');
   });
 });
+
+describe('review fixes: certificate honesty', () => {
+  it('an empty audit log is not reported as continuous', async () => {
+    const out = await exportPdf(await pdfInput(await plainPdf(1), { audit: [] }), { includeTextLayer: false, includeCertificate: true });
+    const t = await texts(out, 2);
+    expect(t).toContain('ไม่ต่อเนื่อง');
+  });
+
+  it('a log that does not start with doc.create or doc.import is not continuous', async () => {
+    const audit = await appendAudit([], { time: 1, author, action: 'stroke.add', objectIds: ['s1'] });
+    const out = await exportPdf(await pdfInput(await plainPdf(1), { audit }), { includeTextLayer: false, includeCertificate: true });
+    expect(await texts(out, 2)).toContain('ไม่ต่อเนื่อง');
+  });
+
+  it('refuses to export a PDF document whose source is missing', async () => {
+    const input = await pdfInput(await plainPdf(1));
+    await expect(exportPdf({ ...input, source: null }, { includeTextLayer: false, includeCertificate: true })).rejects.toThrow(/source/i);
+  });
+});
+
+describe('review fixes: characters the bundled fonts cannot draw', () => {
+  it('lists characters outside the Sarabun subsets, per page', async () => {
+    const { missingGlyphs } = await import('../src/export');
+    const input = await pdfInput(await plainPdf(1), { texts: () => ({ pg1: [tbox('pg1', '王小明 Nguyễn ผู้ต้องหา Smith')] }) });
+    const res = await missingGlyphs(input.state, fonts);
+    expect(res).toHaveLength(1);
+    expect(res[0].pageIndex).toBe(0);
+    for (const ch of ['王', '小', '明', 'ễ']) expect(res[0].chars).toContain(ch);
+    for (const ch of ['ผ', 'S', ' ']) expect(res[0].chars).not.toContain(ch);
+  });
+
+  it('reports nothing for Thai and English only', async () => {
+    const { missingGlyphs } = await import('../src/export');
+    const input = await pdfInput(await plainPdf(1), { texts: () => ({ pg1: [tbox('pg1', 'ผู้ต้องหา ๒ คน Smith 2569')] }) });
+    expect(await missingGlyphs(input.state, fonts)).toEqual([]);
+  });
+});

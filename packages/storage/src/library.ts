@@ -26,6 +26,11 @@ export function blankPage(template: PageTemplate = 'plain'): PageRef {
 }
 
 const localQueues = new Map<string, Promise<unknown>>();
+/** Imports running in this tab (other tabs are seen through Web Locks). */
+const importsInFlight = new Set<string>();
+
+type Locks = LockManager | undefined;
+const webLocks = (): Locks => (globalThis.navigator as (Navigator & { locks?: LockManager }) | undefined)?.locks;
 
 export class Library {
   constructor(private store: EncryptedStore, private author: Author, private now: () => number = () => Date.now()) {}
@@ -68,13 +73,34 @@ export class Library {
     for (const p of await this.store.list(`${docDir(id)}/`)) await this.store.delete(p);
   }
 
-  /** Remove document folders without meta.json (imports interrupted before completion). */
+  /** Hold the import lock of a document for the whole import so no tab mistakes it for an orphan. */
+  async withImportLock<T>(id: Id, fn: () => Promise<T>): Promise<T> {
+    const key = `${this.store.profileId}:${id}`;
+    importsInFlight.add(key);
+    try {
+      const locks = webLocks();
+      return locks ? ((await locks.request(`pnote-import-${key}`, fn)) as T) : await fn();
+    } finally {
+      importsInFlight.delete(key);
+    }
+  }
+
+  private async importRunning(id: Id): Promise<boolean> {
+    const key = `${this.store.profileId}:${id}`;
+    if (importsInFlight.has(key)) return true;
+    const locks = webLocks();
+    if (!locks) return false;
+    return (await locks.request(`pnote-import-${key}`, { ifAvailable: true }, async (lock) => lock === null)) as boolean;
+  }
+
+  /** Remove document folders without meta.json (imports interrupted before completion), skipping imports still running. */
   async cleanupOrphans(): Promise<number> {
     const ids = new Set<string>();
     for (const p of await this.store.list('documents/')) ids.add(p.split('/')[1]);
     let removed = 0;
     for (const id of ids) {
       if (await this.store.getJSON(`${docDir(id)}/meta.json`)) continue;
+      if (await this.importRunning(id)) continue;
       await this.removeDocumentFiles(id);
       removed++;
     }

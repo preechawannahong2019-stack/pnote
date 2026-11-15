@@ -48,3 +48,8 @@ export async function brokenPdf(): Promise<Uint8Array> {
 export function encryptedPdf(): Uint8Array {
   return new Uint8Array(readFileSync(new URL('./encrypted.pdf', import.meta.url)));
 }
+
+/** Owner-password only ("restricted"): opens without a password but is encrypted (qpdf --encrypt "" owner 256). */
+export function restrictedPdf(): Uint8Array {
+  return new Uint8Array(readFileSync(new URL('./restricted.pdf', import.meta.url)));
+}

@@ -1,6 +1,6 @@
 <script lang="ts">
-  let { busy, canShare, onDownload, onShare, onCancel, error }: {
-    busy: boolean; canShare: boolean; error: string;
+  let { busy, canShare, onDownload, onShare, onCancel, error, warning = '' }: {
+    busy: boolean; canShare: boolean; error: string; warning?: string;
     onDownload: (o: { includeTextLayer: boolean }) => void; onShare: (o: { includeTextLayer: boolean }) => void; onCancel: () => void;
   } = $props();
   let includeTextLayer = $state(true);
@@ -12,6 +12,7 @@
     <label class="check"><input type="checkbox" bind:checked={includeTextLayer} /> ใส่ข้อความที่ค้นหาได้ (จาก OCR)</label>
     <p class="warn">ไฟล์ PDF ที่ส่งออกไม่ได้เข้ารหัส ผู้ที่ได้รับไฟล์จะเปิดอ่านได้ทันที</p>
     <p class="muted">ท้ายไฟล์จะมีหน้า "ข้อมูลรับรองเอกสาร" (SHA-256 ต้นฉบับ ผู้เขียน และผลตรวจประวัติการแก้ไข)</p>
+    {#if warning}<p class="warn" role="status">{warning}</p>{/if}
     {#if error}<p class="error" role="alert">{error}</p>{/if}
     <div class="row">
       <button onclick={onCancel} disabled={busy}>ยกเลิก</button>

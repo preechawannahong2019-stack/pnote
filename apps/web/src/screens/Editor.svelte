@@ -9,11 +9,13 @@
   import type { TextBox } from '@pnote/core/types';
   import PageNavigator from '../components/PageNavigator.svelte';
   import TextBoxEditor from '../components/TextBoxEditor.svelte';
-  import { PageSources } from '../lib/page-sources';
+  import { PageSources, backgroundFor } from '../lib/page-sources';
   import { OcrQueue } from '@pnote/pdf/ocr-queue';
   import { createTesseractEngine } from '@pnote/pdf/ocr';
   import { searchPage } from '@pnote/pdf/search';
   import ExportDialog from '../components/ExportDialog.svelte';
+  import { missingGlyphs } from '@pnote/pdf/export';
+  import { loadExportFonts } from '@pnote/pdf/fonts';
   import { buildExport } from '../lib/import-export';
   import type { TextValue } from '../lib/editor-controller';
   import Toolbar from '../components/Toolbar.svelte';
@@ -39,6 +41,19 @@
   let textReq = $state<{ pageId: Id; x: number; y: number; existing?: TextBox } | null>(null);
   let viewSnap = $state({ scale: 1, offsetX: 0, offsetY: 0 });
   let exporting = $state<null | { busy: boolean; error: string }>(null);
+  let glyphWarning = $state('');
+
+  async function openExport() {
+    exporting = { busy: false, error: '' };
+    glyphWarning = '';
+    if (!session) return;
+    try {
+      const missing = await missingGlyphs(session.history.state, await loadExportFonts());
+      glyphWarning = missing.length
+        ? `ตัวอักษรบางตัวจะไม่แสดงใน PDF: ${missing.map((m) => `หน้า ${m.pageIndex + 1} (${m.chars.join(' ')})`).join(', ')}`
+        : '';
+    } catch { /* the warning is best-effort */ }
+  }
   const canShare = typeof navigator !== 'undefined' && !!navigator.canShare?.({ files: [new File([], 'x.pdf', { type: 'application/pdf' })] });
 
   async function doExport(o: { includeTextLayer: boolean }, share: boolean) {
@@ -58,7 +73,13 @@
       exporting = null;
     } catch (e) {
       if ((e as Error)?.name === 'AbortError') { exporting = null; return; }
-      exporting = { busy: false, error: 'ส่งออกไม่สำเร็จ' };
+      const name = (e as Error)?.name;
+      exporting = {
+        busy: false,
+        error: name === 'ExportSourceMissing' ? 'ส่งออกไม่ได้ ไม่พบไฟล์ต้นฉบับของเอกสารนี้ในเครื่อง'
+          : name === 'ExportTooLarge' ? `ไฟล์ต้นฉบับใหญ่เกินกว่าจะส่งออกบนอุปกรณ์นี้ (เกิน ${Math.round((e as { limit: number }).limit / 1_000_000)} MB) ลองส่งออกบนคอมพิวเตอร์`
+          : 'ส่งออกไม่สำเร็จ',
+      };
     }
   }
   let ocr: OcrQueue | null = null;
@@ -67,7 +88,7 @@
   function startOcr(s: EditorSession, src: PageSources) {
     ocr = new OcrQueue({
       lib, docId: s.meta.id, pages: s.meta.pages,
-      render: (pg, px) => src.background(pg, px),
+      render: (pg, px) => src.background(pg, px, 'ocr'),
       pdfWords: async (n) => (await (await src.pdfDoc()).pageWords(n)).map((w) => ({ ...w, conf: 100 })),
       engine: () => createTesseractEngine({ workerPath: './vendor/tesseract/worker.min.js', corePath: './vendor/tesseract/core', langPath: './vendor/tesseract/lang' }),
     });
@@ -164,7 +185,7 @@
       const strokes = (st.strokes[page.id] ?? []).map((s) => (erasing.has(s.id) ? { ...s, hidden: true } : s));
       const shapes = (st.shapes[page.id] ?? []).map((s) => (erasing.has(s.id) ? { ...s, hidden: true } : s));
       const texts = (st.textBoxes?.[page.id] ?? []).map((t) => (textReq?.existing?.id === t.id ? { ...t, hidden: true } : t));
-      renderer.renderPage(page, strokes, shapes, texts, bgKey === bgWant() ? bg : null);
+      renderer.renderPage(page, strokes, shapes, texts, bg ? backgroundFor({ key: bgKey, img: bg }, bgWant()) : null);
       loadBackground();
     }
     if (!todo.live) return;
@@ -413,9 +434,9 @@
     />
     {#if session.readOnly}<div class="ro" role="status">{READ_ONLY_MESSAGE}</div>{/if}
     {#if saveError && version >= 0 && session.saveFailed}<div class="ro err" role="alert">บันทึกไม่สำเร็จ กำลังลองใหม่ — อย่าปิดแอป</div>{/if}
-    {#if !tb.fullscreen && blobs}<button class="export" aria-label="ส่งออก" onclick={() => (exporting = { busy: false, error: '' })}>⤴ ส่งออก</button>{/if}
+    {#if !tb.fullscreen && blobs}<button class="export" aria-label="ส่งออก" onclick={openExport}>⤴ ส่งออก</button>{/if}
     {#if exporting}
-      <ExportDialog busy={exporting.busy} error={exporting.error} {canShare} onCancel={() => (exporting = null)}
+      <ExportDialog busy={exporting.busy} error={exporting.error} warning={glyphWarning} {canShare} onCancel={() => (exporting = null)}
         onDownload={(o) => doExport(o, false)} onShare={(o) => doExport(o, true)} />
     {/if}
     {#if findOpen || findText}

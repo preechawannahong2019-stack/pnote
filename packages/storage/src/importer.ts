@@ -28,6 +28,16 @@ export interface ImporterDeps {
 
 const baseName = (name: string) => name.replace(/\.[^./\\]+$/, '') || name;
 
+const SCAN_BYTES = 262_144;
+
+/** True when the trailer (or xref stream dictionary) names an /Encrypt dictionary. Reads at most 2 × 256 KB. */
+export async function hasEncryptDictionary(src: BlobSource): Promise<boolean> {
+  const dec = new TextDecoder('latin1');
+  const head = dec.decode(await src.slice(0, Math.min(SCAN_BYTES, src.size)));
+  const tail = src.size > SCAN_BYTES ? dec.decode(await src.slice(src.size - SCAN_BYTES, src.size)) : '';
+  return /\/Encrypt[\s/<\[\d]/.test(head) || /\/Encrypt[\s/<\[\d]/.test(tail);
+}
+
 export class Importer {
   private now: () => number;
 
@@ -37,16 +47,19 @@ export class Importer {
 
   private async store(meta: DocumentMeta, src: BlobSource, mime: string, onProgress?: (p: number) => void): Promise<DocumentMeta> {
     const rel = `documents/${meta.id}/source`;
-    try {
-      const m = await this.blobs.put(rel, src, mime, (d, t) => onProgress?.(t ? d / t : 1));
-      const full: DocumentMeta = { ...meta, sourceBlobId: 'source', sourceSha256: m.sha256 };
-      const audit = await appendAudit([], { time: meta.importedAt!, author: this.author, action: 'doc.import', objectIds: [meta.id] });
-      await this.lib.commitImport(full, audit); // meta written last
-      return full;
-    } catch (e) {
-      await this.lib.removeDocumentFiles(meta.id).catch(() => {});
-      throw e;
-    }
+    return this.lib.withImportLock(meta.id, async () => {
+      try {
+        const m = await this.blobs.put(rel, src, mime, (d, t) => onProgress?.(t ? d / t : 1));
+        if (!(await this.blobs.verify(rel))) throw new Error('stored source does not match the file'); // every chunk present and intact
+        const full: DocumentMeta = { ...meta, sourceBlobId: 'source', sourceSha256: m.sha256 };
+        const audit = await appendAudit([], { time: meta.importedAt!, author: this.author, action: 'doc.import', objectIds: [meta.id] });
+        await this.lib.commitImport(full, audit); // meta written last
+        return full;
+      } catch (e) {
+        await this.lib.removeDocumentFiles(meta.id).catch(() => {});
+        throw e;
+      }
+    });
   }
 
   async importPdf(file: ImportFile, folderId: Id | null, onProgress?: (p: number) => void): Promise<DocumentMeta> {
@@ -54,6 +67,8 @@ export class Importer {
     const src = fileSource(file);
     const head = new TextDecoder('latin1').decode(await src.slice(0, Math.min(1024, file.size)));
     if (!head.includes('%PDF-')) throw new ImportFailed('not-pdf');
+    // encrypted PDFs (including owner-password "restricted" ones that open without a password) cannot be exported
+    if (await hasEncryptDictionary(src)) throw new ImportFailed('password');
     let info: PdfInfo;
     try {
       info = await this.deps.readPdfInfo(src);

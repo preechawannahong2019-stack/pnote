@@ -42,3 +42,31 @@ describe('PdfDocumentSource', () => {
     await doc.destroy();
   });
 });
+
+describe('review fixes: render size and caches', () => {
+  it('clamps render size to 4096 px wide and 16 MP', async () => {
+    const { clampRenderWidth, MAX_RENDER_WIDTH, MAX_RENDER_PIXELS } = await import('../src/pdf-source');
+    const w = clampRenderWidth(595.28, 841.89, 20_000);
+    expect(w).toBeLessThanOrEqual(MAX_RENDER_WIDTH);
+    expect(w * w * (841.89 / 595.28)).toBeLessThanOrEqual(MAX_RENDER_PIXELS);
+    expect(clampRenderWidth(595.28, 841.89, 800)).toBe(800);
+    const tall = clampRenderWidth(100, 2000, 4000); // a very tall page is limited by area, not width
+    expect(tall * tall * 20).toBeLessThanOrEqual(MAX_RENDER_PIXELS);
+  });
+
+  it('keeps thumbnails and OCR renders out of the view cache', async () => {
+    const { PdfDocumentSource } = await import('../src/pdf-source');
+    const draws: string[] = [];
+    const fake = Object.create(PdfDocumentSource.prototype) as PdfDocumentSource;
+    Object.assign(fake, { cache: new Map(), side: new Map(), doc: { numPages: 50, getPage: async () => ({ view: [0, 0, 595.28, 841.89] }) } });
+    vi.spyOn(fake as never, 'draw').mockImplementation((async (n: number, w: number) => {
+      draws.push(`${n}:${w}`);
+      return { width: w, height: w } as never;
+    }) as never);
+    await fake.render(1, 1000, 'view');
+    for (let n = 2; n <= 12; n++) await fake.render(n, 120, 'thumb');
+    draws.length = 0;
+    await fake.render(1, 1000, 'view');
+    expect(draws).toEqual([]); // still cached: thumbnails did not evict it
+  });
+});

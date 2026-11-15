@@ -2,7 +2,7 @@ import type { Author, DocumentMeta, Id, OcrPage } from '@pnote/core/types';
 import { exportPdf, type ExportOptions } from '@pnote/pdf/export';
 import { loadExportFonts } from '@pnote/pdf/fonts';
 import { readPdfInfo } from '@pnote/pdf/pdf-source';
-import { BlobStore, type BlobSource } from '@pnote/storage/blob-store';
+import { BlobStore, type BlobManifest, type BlobSource } from '@pnote/storage/blob-store';
 import { ImportFailed, Importer, type ImportError } from '@pnote/storage/importer';
 import type { Library } from '@pnote/storage/library';
 import { PDFJS_ASSETS } from './page-sources';
@@ -55,10 +55,35 @@ async function toPdfImage(bytes: Uint8Array, mime: string): Promise<{ bytes: Uin
   return { bytes: new Uint8Array(await (await c.convertToBlob({ type: 'image/png' })).arrayBuffer()), mime: 'image/png' };
 }
 
+/**
+ * What the certificate may claim about the original: null for notebooks (no original);
+ * true only if the stored manifest records the SHA-256 taken at import AND every chunk still hashes to it.
+ */
+export async function sourceIntegrity(meta: DocumentMeta, manifest: BlobManifest | null, verify: () => Promise<boolean>): Promise<boolean | null> {
+  if (meta.kind === 'notebook') return null;
+  if (!manifest || !meta.sourceSha256 || manifest.sha256 !== meta.sourceSha256) return false;
+  return verify();
+}
+
+/** Export holds the original 3–4× in memory (bytes, parsed copy, output). Keep within what the device can take. */
+export function exportSizeLimit(deviceMemoryGB: number | undefined): number {
+  return (deviceMemoryGB ?? 0) >= 8 ? 600_000_000 : 150_000_000;
+}
+
+export class ExportTooLarge extends Error {
+  constructor(readonly limit: number) { super(`original is larger than ${limit} bytes`); this.name = 'ExportTooLarge'; }
+}
+
+export function assertExportable(sourceBytes: number, deviceMemoryGB: number | undefined): void {
+  const limit = exportSizeLimit(deviceMemoryGB);
+  if (sourceBytes > limit) throw new ExportTooLarge(limit);
+}
+
 export async function buildExport(lib: Library, blobs: BlobStore, docId: Id, by: Author, opts: ExportOptions): Promise<{ bytes: Uint8Array; name: string }> {
   const { meta, state, audit } = await lib.openDocument(docId);
   const rel = `documents/${meta.id}/source`;
   const manifest = meta.kind === 'notebook' ? null : await blobs.manifest(rel);
+  if (manifest) assertExportable(manifest.size, (navigator as Navigator & { deviceMemory?: number }).deviceMemory);
   const source = meta.kind === 'pdf' && manifest ? await blobs.readAll(rel) : null;
   const images: Record<Id, { bytes: Uint8Array; mime: string }> = {};
   if (meta.kind === 'image' && manifest) {
@@ -67,7 +92,7 @@ export async function buildExport(lib: Library, blobs: BlobStore, docId: Id, by:
   }
   const textLayers: Record<Id, OcrPage> = {};
   if (opts.includeTextLayer) for (const p of meta.pages) { const l = await lib.getTextLayer(meta.id, p.id); if (l) textLayers[p.id] = l; }
-  const sourceIntact = manifest ? await blobs.verify(rel) : null;
+  const sourceIntact = await sourceIntegrity(meta, manifest, () => blobs.verify(rel));
   const bytes = await exportPdf({ meta, state, audit, source, images, textLayers, sourceIntact, exportedAt: Date.now(), exportedBy: by, fonts: await loadExportFonts() }, opts);
   return { bytes, name: exportFileName(meta.title) };
 }

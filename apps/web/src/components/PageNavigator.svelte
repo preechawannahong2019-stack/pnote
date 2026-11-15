@@ -21,7 +21,7 @@
 
   function thumb(node: HTMLCanvasElement, page: PageRef) {
     let alive = true;
-    sources?.background(page, 120).then((bg) => {
+    sources?.background(page, 120, 'thumb').then((bg) => {
       if (!alive || !bg) return;
       node.width = 100;
       node.height = Math.round((100 * page.heightPt) / page.widthPt);
