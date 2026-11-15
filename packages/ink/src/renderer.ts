@@ -1,4 +1,4 @@
-import type { Id, InputKind, PageRef, PenStyle, Shape, Stroke, Tool } from '@pnote/core/types';
+import type { Id, InputKind, PageRef, PenStyle, Shape, Stroke, TextBox, Tool } from '@pnote/core/types';
 import { shapePolyline } from './geometry';
 import { strokeOutline } from './outline';
 import { templateLines } from './templates';
@@ -23,6 +23,41 @@ function fillPolygon(ctx: CanvasRenderingContext2D, poly: [number, number][]): v
   for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
   ctx.closePath();
   ctx.fill();
+}
+
+export const TEXT_LINE_HEIGHT = 1.4;
+export const textFont = (t: Pick<TextBox, 'bold' | 'sizePt'>) => `${t.bold ? '700 ' : ''}${t.sizePt}px Sarabun, 'Noto Sans Thai', sans-serif`;
+
+/** Greedy wrap by measured width; Thai has no spaces between words, so it falls back to characters. */
+export function wrapText(measure: (s: string) => number, text: string, width: number): string[] {
+  const lines: string[] = [];
+  for (const para of text.split('\n')) {
+    let line = '';
+    const tokens = para.match(/\S+\s*|\s+/g) ?? [''];
+    for (const tok of tokens) {
+      if (measure(line + tok) <= width || !line) {
+        if (measure(tok) > width && !line) {
+          for (const ch of Array.from(tok)) {
+            if (measure(line + ch) > width && line) { lines.push(line); line = ''; }
+            line += ch;
+          }
+        } else line += tok;
+      } else {
+        lines.push(line.trimEnd());
+        line = tok;
+      }
+    }
+    lines.push(line.trimEnd());
+  }
+  return lines;
+}
+
+export function drawTextBox(ctx: CanvasRenderingContext2D, t: TextBox): void {
+  ctx.font = textFont(t);
+  ctx.fillStyle = t.color;
+  ctx.textBaseline = 'top';
+  const lines = wrapText((s) => ctx.measureText(s).width, t.text, t.w);
+  lines.forEach((l, i) => ctx.fillText(l, t.x, t.y + i * t.sizePt * TEXT_LINE_HEIGHT));
 }
 
 export class PageRenderer {
@@ -56,7 +91,7 @@ export class PageRenderer {
     else strokeIds.forEach((id) => this.cache.delete(id));
   }
 
-  renderPage(page: PageRef, strokes: Stroke[], shapes: Shape[]): void {
+  renderPage(page: PageRef, strokes: Stroke[], shapes: Shape[], textBoxes: TextBox[] = [], background: CanvasImageSource | null = null): void {
     const ctx = this.base;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.baseCanvas.width, this.baseCanvas.height);
@@ -65,6 +100,7 @@ export class PageRenderer {
     ctx.globalAlpha = 1;
     ctx.fillStyle = PAGE_COLOR;
     ctx.fillRect(0, 0, page.widthPt, page.heightPt);
+    if (background) ctx.drawImage(background, 0, 0, page.widthPt, page.heightPt);
     if (page.source.type === 'blank') {
       ctx.strokeStyle = TEMPLATE_COLOR;
       ctx.lineWidth = 0.5;
@@ -86,6 +122,7 @@ export class PageRenderer {
     for (const s of pens) this.fillStroke(ctx, s);
     for (const s of shapes) if (!s.hidden) this.strokeShape(ctx, s);
     ctx.globalAlpha = 1;
+    for (const t of textBoxes) if (!t.hidden) drawTextBox(ctx, t);
   }
 
   private fillStroke(ctx: CanvasRenderingContext2D, s: Stroke): void {
