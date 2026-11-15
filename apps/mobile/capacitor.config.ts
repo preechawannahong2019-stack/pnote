@@ -6,7 +6,7 @@ const config: CapacitorConfig = {
   webDir: '../web/dist',
   server: { androidScheme: 'https' },
   android: { allowMixedContent: false, captureInput: true, webContentsDebuggingEnabled: false },
-  ios: { contentInset: 'never', limitsNavigationsToAppBoundDomains: true },
+  ios: { contentInset: 'never' },
   plugins: { PrivacyScreen: { enable: true } },
 };
 

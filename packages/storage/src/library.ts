@@ -2,7 +2,7 @@ import { appendAudit, verifyAudit, type AuditEntry } from '@pnote/core/audit';
 import type { DocState } from '@pnote/core/doc-state';
 import { newId } from '@pnote/core/ids';
 import { decodePage, encodePage } from '@pnote/core/serialize';
-import { A4, type Author, type DocumentMeta, type Folder, type Id, type OcrPage, type PageRef, type PageTemplate, type PenPreset } from '@pnote/core/types';
+import { A4, type Author, type DocumentMeta, type Folder, type Id, type OcrPage, type PageRef, type PageTemplate, type PenPreset, type CaptureRecord } from '@pnote/core/types';
 import type { EncryptedStore } from './encrypted-store';
 
 export class FolderNotEmptyError extends Error {
@@ -105,6 +105,14 @@ export class Library {
       removed++;
     }
     return removed;
+  }
+
+  getCaptureRecord(docId: Id): Promise<CaptureRecord | null> {
+    return this.store.getJSON<CaptureRecord>(`${docDir(docId)}/capture.json`);
+  }
+
+  putCaptureRecord(docId: Id, rec: CaptureRecord): Promise<void> {
+    return this.store.putJSON(`${docDir(docId)}/capture.json`, rec);
   }
 
   getTextLayer(docId: Id, pageId: Id): Promise<OcrPage | null> {

@@ -181,3 +181,18 @@ describe('review fixes: characters the bundled fonts cannot draw', () => {
     expect(await missingGlyphs(input.state, fonts)).toEqual([]);
   });
 });
+
+describe('stage 3: web capture export', () => {
+  it('puts the URL and capture time on every page and the capture hashes on the certificate', async () => {
+    const base = await pdfInput(await plainPdf(2));
+    const capture = { requestedUrl: 'https://a.go.th/x', finalUrl: 'https://a.go.th/x?y=1', capturedAt: Date.UTC(2026, 10, 15, 3, 0), timeZone: 'Asia/Bangkok', userAgent: 'UA',
+      files: [{ name: 'page.pdf' as const, sha256: 'p'.repeat(64), bytes: 1 }, { name: 'screenshot.png' as const, sha256: 's'.repeat(64), bytes: 1 }, { name: 'page.mht' as const, sha256: 'm'.repeat(64), bytes: 1 }] };
+    const input = { ...base, meta: { ...base.meta, kind: 'web' as const, sourceUrl: capture.finalUrl, capturedAt: capture.capturedAt }, capture };
+    const out = await exportPdf(input, { includeTextLayer: false, includeCertificate: true });
+    for (const n of [1, 2]) expect(await texts(out, n)).toContain('ที่มา: https://a.go.th/x?y=1');
+    const cert = await texts(out, 3);
+    expect(cert).toContain('https://a.go.th/x');
+    expect(cert).toContain('s'.repeat(64));
+    expect(cert).toContain('m'.repeat(64));
+  });
+});

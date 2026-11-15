@@ -2,7 +2,7 @@ import fontkit from '@pdf-lib/fontkit';
 import { BlendMode, degrees, PDFDocument, rgb, type PDFFont, type PDFPage } from 'pdf-lib';
 import { verifyAudit, type AuditEntry } from '@pnote/core/audit';
 import type { DocState } from '@pnote/core/doc-state';
-import type { Author, DocumentMeta, Id, OcrPage, PageRef, PdfPageBox, Shape, Stroke, TextBox } from '@pnote/core/types';
+import type { Author, DocumentMeta, Id, OcrPage, PageRef, PdfPageBox, Shape, Stroke, TextBox , CaptureRecord } from '@pnote/core/types';
 import { shapePolyline } from '@pnote/ink/geometry';
 import { strokeOutline } from '@pnote/ink/outline';
 import { TEXT_LINE_HEIGHT, wrapText } from '@pnote/ink/renderer';
@@ -23,6 +23,8 @@ export interface ExportInput {
   exportedAt: number;
   exportedBy: Author;
   fonts: ExportFonts;
+  /** Web captures only: URLs, time zone and the hashes of the stored capture files. */
+  capture?: CaptureRecord | null;
 }
 export interface ExportOptions { includeTextLayer: boolean; includeCertificate: boolean }
 
@@ -139,6 +141,14 @@ export function certificateLines(input: ExportInput, auditOk: boolean): { label:
     { label: 'จำนวนการแก้ไข', value: String(audit.length) },
     { label: 'hash ล่าสุดของประวัติ', value: audit[audit.length - 1]?.hash ?? '-' },
     { label: 'ผลตรวจประวัติการแก้ไข', value: ok ? 'ต่อเนื่อง' : 'ไม่ต่อเนื่อง' },
+    ...(input.capture ? [
+      { label: 'URL ที่ขอ', value: input.capture.requestedUrl },
+      { label: 'URL สุดท้าย', value: input.capture.finalUrl },
+      { label: 'เวลาบันทึกหน้าเว็บ', value: `${fmtTime(input.capture.capturedAt)} (${input.capture.timeZone})` },
+      ...input.capture.files.filter((f) => f.name !== 'page.pdf').map((f) => ({
+        label: f.name === 'screenshot.png' ? 'SHA-256 ของภาพหน้าจอ' : 'SHA-256 ของไฟล์เก็บหน้าเว็บ', value: f.sha256,
+      })),
+    ] : []),
     { label: 'เวลาส่งออก', value: fmtTime(input.exportedAt) },
     { label: 'ผู้ส่งออก', value: input.exportedBy.name },
   ];
@@ -211,6 +221,10 @@ export async function exportPdf(input: ExportInput, opts: ExportOptions): Promis
     for (const t of (state.textBoxes?.[p.id] ?? []).filter((t) => !t.hidden)) drawTextBox(page, box, t, regular, bold);
     const layer = input.textLayers[p.id];
     if (opts.includeTextLayer && layer && layer.engine === 'tesseract') drawTextLayer(page, box, layer, regular);
+    if (meta.kind === 'web' && meta.sourceUrl) {
+      const when = meta.capturedAt ? ` · บันทึกเมื่อ ${fmtTime(meta.capturedAt)}${input.capture ? ` (${input.capture.timeZone})` : ''}` : '';
+      drawMixed(page, box, `ที่มา: ${meta.sourceUrl}${when}`, 12, p.heightPt - 8, 7, regular, rgb(0.45, 0.45, 0.45));
+    }
   }
 
   if (opts.includeCertificate) {

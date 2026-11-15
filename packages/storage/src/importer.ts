@@ -26,6 +26,17 @@ export interface ImporterDeps {
   now?: () => number;
 }
 
+export interface WebCaptureInput {
+  requestedUrl: string; finalUrl: string; title: string; userAgent: string; capturedAt: number; timeZone: string;
+  pdf: Uint8Array; png: Uint8Array; archive: Uint8Array; archiveType: 'mht' | 'webarchive';
+}
+
+export function bytesSource(b: Uint8Array): BlobSource {
+  return { size: b.length, slice: async (s, e) => b.slice(s, e) };
+}
+
+const hostOf = (url: string) => { try { return new URL(url).host; } catch { return url; } };
+
 const baseName = (name: string) => name.replace(/\.[^./\\]+$/, '') || name;
 
 const SCAN_BYTES = 262_144;
@@ -45,13 +56,14 @@ export class Importer {
     this.now = deps.now ?? (() => Date.now());
   }
 
-  private async store(meta: DocumentMeta, src: BlobSource, mime: string, onProgress?: (p: number) => void): Promise<DocumentMeta> {
+  private async store(meta: DocumentMeta, src: BlobSource, mime: string, onProgress?: (p: number) => void, extra?: (meta: DocumentMeta) => Promise<void>): Promise<DocumentMeta> {
     const rel = `documents/${meta.id}/source`;
     return this.lib.withImportLock(meta.id, async () => {
       try {
         const m = await this.blobs.put(rel, src, mime, (d, t) => onProgress?.(t ? d / t : 1));
         if (!(await this.blobs.verify(rel))) throw new Error('stored source does not match the file'); // every chunk present and intact
         const full: DocumentMeta = { ...meta, sourceBlobId: 'source', sourceSha256: m.sha256 };
+        await extra?.(full);
         const audit = await appendAudit([], { time: meta.importedAt!, author: this.author, action: 'doc.import', objectIds: [meta.id] });
         await this.lib.commitImport(full, audit); // meta written last
         return full;
@@ -83,6 +95,37 @@ export class Importer {
       originalName: file.name, importedAt: t, pages, createdAt: t, updatedAt: t,
     };
     return this.store(meta, src, 'application/pdf', onProgress);
+  }
+
+  /** A web page saved by the capture browser: its PDF is the document; screenshot, archive and a hash record are kept with it. */
+  async importWebCapture(c: WebCaptureInput, folderId: Id | null): Promise<DocumentMeta> {
+    const src = bytesSource(c.pdf);
+    let info: PdfInfo;
+    try {
+      info = await this.deps.readPdfInfo(src);
+    } catch (e) {
+      throw new ImportFailed('corrupt', e);
+    }
+    if (!info.length) throw new ImportFailed('corrupt');
+    const t = this.now();
+    const pages: PageRef[] = info.map((p) => ({ id: newId(), source: { type: 'pdf', pageNo: p.pageNo }, widthPt: p.widthPt, heightPt: p.heightPt, pdfBox: p.box }));
+    const meta: DocumentMeta = {
+      id: newId(), profileId: this.lib.profileId, folderId, title: c.title.trim() || hostOf(c.finalUrl), kind: 'web',
+      sourceUrl: c.finalUrl, capturedAt: c.capturedAt, importedAt: t, pages, createdAt: t, updatedAt: t,
+    };
+    return this.store(meta, src, 'application/pdf', undefined, async (full) => {
+      const dir = `documents/${full.id}/capture`;
+      const png = await this.blobs.put(`${dir}/screenshot`, bytesSource(c.png), 'image/png');
+      const archive = await this.blobs.put(`${dir}/archive`, bytesSource(c.archive), c.archiveType === 'mht' ? 'multipart/related' : 'application/x-webarchive');
+      await this.lib.putCaptureRecord(full.id, {
+        requestedUrl: c.requestedUrl, finalUrl: c.finalUrl, capturedAt: c.capturedAt, timeZone: c.timeZone, userAgent: c.userAgent,
+        files: [
+          { name: 'page.pdf', sha256: full.sourceSha256!, bytes: c.pdf.length },
+          { name: 'screenshot.png', sha256: png.sha256, bytes: c.png.length },
+          { name: c.archiveType === 'mht' ? 'page.mht' : 'page.webarchive', sha256: archive.sha256, bytes: c.archive.length },
+        ],
+      });
+    });
   }
 
   async importImage(file: ImportFile, folderId: Id | null): Promise<DocumentMeta> {

@@ -10,3 +10,14 @@ export interface PnoteSecurePlugin {
 }
 
 export const PnoteSecure = registerPlugin<PnoteSecurePlugin>('PnoteSecure');
+
+export interface PnoteCapturePlugin {
+  /** Shows the page in a private browser sheet; resolves when the user taps "บันทึกหน้านี้". Paths are relative to the app cache directory.
+   *  Rejects with code 'CANCELLED' | 'TIMEOUT' | 'LOAD_FAILED' | 'INVALID_URL'. */
+  capture(o: { url: string }): Promise<{
+    requestedUrl: string; finalUrl: string; title: string; userAgent: string; capturedAt: number; timeZone: string;
+    pdfPath: string; pngPath: string; archivePath: string; archiveType: 'mht' | 'webarchive';
+  }>;
+}
+
+export const PnoteCapture = registerPlugin<PnoteCapturePlugin>('PnoteCapture');

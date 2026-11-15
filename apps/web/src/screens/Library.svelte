@@ -7,6 +7,9 @@
   import Thumbnail from '../components/Thumbnail.svelte';
   import SearchResults from '../components/SearchResults.svelte';
   import ImportButton from '../components/ImportButton.svelte';
+  import CaptureDialog from '../components/CaptureDialog.svelte';
+  import { currentServices } from '../platform';
+  import type { CaptureResult } from '../platform/capture';
   import { importFile, makeImporter } from '../lib/import-export';
   import { searchLibrary, type SearchHit } from '@pnote/pdf/search';
 
@@ -15,6 +18,19 @@
   const blobs = new BlobStore(store);
   lib.cleanupOrphans().catch(() => {});
   const importer = makeImporter(lib, blobs, author);
+  let capturing = $state(false);
+
+  async function saveCapture(c: CaptureResult) {
+    importing = 'กำลังบันทึกหน้าเว็บ…';
+    try {
+      const meta = await importer.importWebCapture(c, folderId);
+      capturing = false;
+      await refresh();
+      openDoc = meta.id;
+    } finally {
+      importing = '';
+    }
+  }
   let importing = $state<string | null>(null);
   let dragOver = $state(false);
 
@@ -112,6 +128,9 @@
   }
 </script>
 
+{#if capturing}
+  <CaptureDialog capture={currentServices().capture} onCaptured={saveCapture} onCancel={() => (capturing = false)} />
+{/if}
 {#if openDoc}
   <Editor {lib} {blobs} {author} docId={openDoc} initialPage={openPage} highlight={query.trim()} onClose={() => { openDoc = null; openPage = 0; }} />
 {:else}
@@ -123,6 +142,7 @@
       </nav>
       <input class="search" type="search" placeholder="ค้นหาชื่อเอกสาร" aria-label="ค้นหาชื่อเอกสาร" bind:value={query} />
       <ImportButton busy={!!importing} onFiles={importFiles} />
+      <button onclick={() => (capturing = true)}>＋ บันทึกหน้าเว็บ</button>
       <button onclick={() => { dialog = 'folder'; newTitle = ''; }}>＋ โฟลเดอร์</button>
       <button class="primary" onclick={() => { dialog = 'notebook'; newTitle = 'สมุดใหม่'; }}>＋ สมุดใหม่</button>
       <button onclick={onLock}>🔒 ล็อก</button>

@@ -115,3 +115,40 @@ describe('review fixes: cleanup while an import is running', () => {
     expect(await blobs.verify(`documents/${meta.id}/source`)).toBe(true);
   });
 });
+
+describe('stage 3: web captures', () => {
+  const capture = async () => ({
+    requestedUrl: 'https://example.go.th/post/1', finalUrl: 'https://example.go.th/post/1?ref=x', title: 'ประกาศ', userAgent: 'UA/1',
+    capturedAt: 1_700_000_000_000, timeZone: 'Asia/Bangkok',
+    pdf: await plainPdf(2), png: new Uint8Array([137, 80, 78, 71, 1, 2, 3]), archive: new TextEncoder().encode('MIME-Version: 1.0'), archiveType: 'mht' as const,
+  });
+
+  it('imports a capture as a web document with a record of every file hash', async () => {
+    const { imp, lib } = await setup();
+    const c = await capture();
+    const meta = await imp.importWebCapture(c, null);
+    expect(meta).toMatchObject({ kind: 'web', sourceUrl: c.finalUrl, capturedAt: c.capturedAt, title: 'ประกาศ' });
+    expect(meta.pages).toHaveLength(2);
+    const rec = (await lib.getCaptureRecord(meta.id))!;
+    expect(rec).toMatchObject({ requestedUrl: c.requestedUrl, finalUrl: c.finalUrl, timeZone: 'Asia/Bangkok', userAgent: 'UA/1' });
+    const hash = async (b: Uint8Array) => (await import('@pnote/core/hash')).sha256Hex(b);
+    expect(rec.files).toEqual([
+      { name: 'page.pdf', sha256: await hash(c.pdf), bytes: c.pdf.length },
+      { name: 'screenshot.png', sha256: await hash(c.png), bytes: c.png.length },
+      { name: 'page.mht', sha256: await hash(c.archive), bytes: c.archive.length },
+    ]);
+    expect((await lib.openDocument(meta.id)).audit.map((a) => a.action)).toEqual(['doc.import']);
+  });
+
+  it('falls back to the host name for a capture without a title', async () => {
+    const { imp } = await setup();
+    const meta = await imp.importWebCapture({ ...(await capture()), title: '' }, null);
+    expect(meta.title).toBe('example.go.th');
+  });
+
+  it('leaves nothing behind when the capture PDF is broken', async () => {
+    const { imp, lib, store } = await setup();
+    await expect(imp.importWebCapture({ ...(await capture()), pdf: await brokenPdf() }, null)).rejects.toBeInstanceOf(ImportFailed);
+    await expectNothingStored(lib, store);
+  });
+});
