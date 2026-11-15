@@ -147,3 +147,91 @@ export function generateRecoveryCode(): string {
 export function normalizeRecoveryCode(input: string): string {
   return input.toUpperCase().replace(/[\s-]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
 }
+
+// ---- streaming form (for .pnote backups): chunks of CHUNK_SIZE plaintext, each `iv(12) || ciphertext+tag`.
+// AAD = chunk index (u32 LE) · final flag (u8) · caller context. The last chunk is flagged final, so a stream cut
+// at a chunk boundary is detected; the order of chunks is bound by the index.
+
+function streamAad(index: number, final: boolean, context: Uint8Array): Uint8Array<ArrayBuffer> {
+  const a = new Uint8Array(5 + context.length);
+  new DataView(a.buffer).setUint32(0, index, true);
+  a[4] = final ? 1 : 0;
+  a.set(context, 5);
+  return a;
+}
+
+function join(a: Uint8Array, b: Uint8Array): Uint8Array {
+  if (!a.length) return b.slice();
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a, 0);
+  out.set(b, a.length);
+  return out;
+}
+
+export function createChunkEncryptor(key: CryptoKey, context: Uint8Array): { push(plain: Uint8Array): Promise<Uint8Array[]>; finish(): Promise<Uint8Array[]> } {
+  let pending: Uint8Array = new Uint8Array(0);
+  let index = 0;
+  const seal = async (chunk: Uint8Array, final: boolean) => {
+    const iv = randomBytes(IV);
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: buf(iv), additionalData: streamAad(index++, final, context) }, key, buf(chunk.slice())));
+    return join(iv, ct);
+  };
+  return {
+    async push(plain) {
+      pending = join(pending, plain);
+      const out: Uint8Array[] = [];
+      // keep at least one byte back: only finish() emits the final chunk
+      while (pending.length > CHUNK_SIZE) {
+        out.push(await seal(pending.subarray(0, CHUNK_SIZE), false));
+        pending = pending.slice(CHUNK_SIZE);
+      }
+      return out;
+    },
+    async finish() {
+      const last = await seal(pending, true);
+      pending = new Uint8Array(0);
+      return [last];
+    },
+  };
+}
+
+/** finish() returns the plaintext of the final chunk and throws TamperedError if the stream was cut or altered. */
+export function createChunkDecryptor(key: CryptoKey, context: Uint8Array): { push(cipher: Uint8Array): Promise<Uint8Array[]>; finish(): Promise<Uint8Array[]> } {
+  const FULL = IV + CHUNK_SIZE + TAG;
+  let pending: Uint8Array = new Uint8Array(0);
+  let index = 0;
+  let ended = false;
+  const open = async (chunk: Uint8Array, final: boolean) => {
+    if (chunk.length < IV + TAG) throw new TamperedError('stream is truncated');
+    try {
+      return new Uint8Array(await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: chunk.slice(0, IV), additionalData: streamAad(index++, final, context) }, key, chunk.slice(IV)));
+    } catch {
+      throw new TamperedError();
+    }
+  };
+  return {
+    async push(cipher) {
+      if (ended) throw new TamperedError('data after the end of the stream');
+      pending = join(pending, cipher);
+      const plain: Uint8Array[] = [];
+      while (pending.length > FULL) {
+        plain.push(await open(pending.subarray(0, FULL), false));
+        pending = pending.slice(FULL);
+      }
+      return plain;
+    },
+    async finish() {
+      ended = true;
+      const last = await open(pending, true);
+      pending = new Uint8Array(0);
+      return [last];
+    },
+  };
+}
+
+/** AES-GCM key for a .pnote file, from its password (Argon2id with the parameters recorded in the file). */
+export async function deriveBackupKey(password: string, salt: Uint8Array, p: { memoryKiB: number; iterations: number; parallelism: number }): Promise<CryptoKey> {
+  const raw = await argon2id({ password: password.normalize('NFC'), salt, memorySize: p.memoryKiB, iterations: p.iterations, parallelism: p.parallelism, hashLength: 32, outputType: 'binary' });
+  return crypto.subtle.importKey('raw', buf(raw), 'AES-GCM', false, ['encrypt', 'decrypt']);
+}

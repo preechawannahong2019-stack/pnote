@@ -36,6 +36,37 @@ export class BlobStore {
     return manifest;
   }
 
+  /** Streaming put: write pieces of any size; chunks of BLOB_CHUNK are stored as they fill; close() writes the manifest last. */
+  async writer(rel: string, mime: string): Promise<{ write(b: Uint8Array): Promise<void>; close(): Promise<BlobManifest> }> {
+    const hasher = await createSHA256();
+    hasher.init();
+    let buf = new Uint8Array(0);
+    let index = 0;
+    let size = 0;
+    const flush = async (all: boolean) => {
+      while (buf.length >= BLOB_CHUNK || (all && (buf.length || index === 0))) {
+        const part = buf.slice(0, BLOB_CHUNK);
+        buf = buf.slice(part.length);
+        await this.store.putBytes(chunkName(rel, index++), part);
+        if (!part.length) break;
+      }
+    };
+    return {
+      write: async (b) => {
+        hasher.update(b);
+        size += b.length;
+        const j = new Uint8Array(buf.length + b.length); j.set(buf, 0); j.set(b, buf.length); buf = j;
+        await flush(false);
+      },
+      close: async () => {
+        await flush(true);
+        const manifest: BlobManifest = { size, chunks: Math.max(1, index), sha256: hasher.digest('hex'), mime };
+        await this.store.putJSON(`${rel}/manifest.json`, manifest);
+        return manifest;
+      },
+    };
+  }
+
   manifest(rel: string): Promise<BlobManifest | null> {
     return this.store.getJSON<BlobManifest>(`${rel}/manifest.json`);
   }

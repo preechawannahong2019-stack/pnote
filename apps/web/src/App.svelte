@@ -7,6 +7,7 @@
   import CreateProfile from './screens/CreateProfile.svelte';
   import Unlock from './screens/Unlock.svelte';
   import Recover from './screens/Recover.svelte';
+  import RestoreProfile from './screens/RestoreProfile.svelte';
   import Library from './screens/Library.svelte';
   import { createIdleLock, DEFAULT_IDLE_MS } from './lib/idle-lock';
   import { bindIdleLock, getLifecycle } from './platform/lifecycle';
@@ -17,7 +18,7 @@
   } = $props();
 
   const service = new ProfileService(adapter, device);
-  let view = $state<'picker' | 'create' | 'unlock' | 'recover' | 'library'>('picker');
+  let view = $state<'picker' | 'create' | 'restore' | 'unlock' | 'recover' | 'library'>('picker');
   let selected = $state<ProfileSummary | null>(null);
   let session = $state<Ok | null>(null);
   let pickerKey = $state(0);
@@ -45,10 +46,12 @@
 <SecurityBanner {device} />
 {#if view === 'picker'}
   {#key pickerKey}
-    <ProfilePicker {service} onPick={(p) => { selected = p; view = 'unlock'; }} onCreate={() => (view = 'create')} />
+    <ProfilePicker {service} onPick={(p) => { selected = p; view = 'unlock'; }} onCreate={() => (view = 'create')} onRestore={() => (view = 'restore')} />
   {/key}
 {:else if view === 'create'}
   <CreateProfile {service} pin={device.available} onDone={(p) => { selected = p; view = 'unlock'; }} onCancel={() => { pickerKey++; view = 'picker'; }} />
+{:else if view === 'restore'}
+  <RestoreProfile {service} pin={device.available} onDone={(p) => { selected = p; view = 'unlock'; }} onCancel={() => { pickerKey++; view = 'picker'; }} />
 {:else if view === 'unlock' && selected}
   <Unlock {service} profile={selected} pin={device.available} onUnlocked={unlocked} onRecover={() => (view = 'recover')} onBack={() => { pickerKey++; view = 'picker'; }} />
 {:else if view === 'recover' && selected}

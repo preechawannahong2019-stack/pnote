@@ -37,6 +37,19 @@ export async function createNativeServices(kind: Exclude<PlatformKind, 'web'>): 
         await Filesystem.writeFile({ path, data: btoa(b64), directory: Directory.Cache, recursive: true });
         return (await Filesystem.getUri({ path, directory: Directory.Cache })).uri;
       },
+      async createCache(name) {
+        const path = `export/${Date.now()}/${name}`;
+        await Filesystem.writeFile({ path, data: '', directory: Directory.Cache, recursive: true });
+        const uri = (await Filesystem.getUri({ path, directory: Directory.Cache })).uri;
+        return {
+          uri,
+          async append(bytes) {
+            let s = '';
+            for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+            await Filesystem.appendFile({ path, data: btoa(s), directory: Directory.Cache });
+          },
+        };
+      },
       remove: async (uri) => { await Filesystem.deleteFile({ path: uri }); },
       share: async ({ files, title }) => { await Share.share({ files, title, dialogTitle: title }); },
       // the system share sheet also offers "Save to Files" / Drive / Downloads

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ProfileService, ProfileSummary } from '@pnote/storage/profiles';
-  let { service, onPick, onCreate }: { service: ProfileService; onPick: (p: ProfileSummary) => void; onCreate: () => void } = $props();
+  let { service, onPick, onCreate, onRestore }: { service: ProfileService; onPick: (p: ProfileSummary) => void; onCreate: () => void; onRestore?: () => void } = $props();
   let profiles = $state<ProfileSummary[]>([]);
   $effect(() => { service.list().then((p) => (profiles = p)); });
 </script>
@@ -19,4 +19,5 @@
     {/each}
   </ul>
   <button class="primary" onclick={onCreate}>สร้างโปรไฟล์ใหม่</button>
+  {#if onRestore}<button onclick={onRestore}>กู้คืนโปรไฟล์จากไฟล์สำรอง</button>{/if}
 </main>

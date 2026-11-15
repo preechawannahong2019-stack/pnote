@@ -89,6 +89,10 @@ export interface DocumentMeta {
   sourceUrl?: string;
   capturedAt?: number;
   originalName?: string;
+  /** id the document had on the device it was imported from (.pnote), when it had to take a new id here */
+  originId?: Id;
+  /** set when another imported copy replaced this one: hidden from the library, files kept */
+  replacedBy?: Id;
   importedAt?: number;
   pages: PageRef[];
   createdAt: number;

@@ -8,6 +8,7 @@ function deps(opts: { shareFails?: unknown; saveFails?: unknown } = {}) {
     written, removed, shared,
     d: {
       writeCache: async (name: string, _b: Uint8Array) => { const uri = `file:///cache/export/${name}`; written.push(uri); return uri; },
+      createCache: async () => { throw new Error('not used'); },
       remove: async (uri: string) => { removed.push(uri); },
       share: async (o: { files: string[]; title: string }) => { shared.push(o.files); if (opts.shareFails) throw opts.shareFails; },
       saveToFiles: async (_uri: string) => { if (opts.saveFails) throw opts.saveFails; },

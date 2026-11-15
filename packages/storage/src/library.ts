@@ -154,6 +154,33 @@ export class Library {
     });
   }
 
+  /** Every document in the library index (all folders). */
+  async allDocuments(): Promise<DocumentMeta[]> { return this.index(); }
+
+  /** Raw access to the profile's encrypted files, for .pnote backup and restore only. */
+  backupAccess(): EncryptedStore { return this.store; }
+
+  /** Write an imported document's meta last (makes it visible), under the library lock. */
+  async publishImported(meta: DocumentMeta): Promise<void> { await this.locked(() => this.putMeta(meta)); }
+
+  /** Hide a document replaced by an imported copy: removed from the index, files and meta kept. */
+  async hideReplaced(id: Id, by: Id): Promise<void> {
+    await this.locked(async () => {
+      const meta = await this.getMeta(id);
+      await this.store.putJSON(`${docDir(id)}/meta.json`, { ...meta, replacedBy: by });
+      await this.store.putJSON(INDEX, (await this.index()).filter((d) => d.id !== id));
+    });
+  }
+
+  /** Add folders that do not exist yet (by id). */
+  async mergeFolders(incoming: Folder[]): Promise<void> {
+    await this.locked(async () => {
+      const have = await this.folders();
+      const ids = new Set(have.map((f) => f.id));
+      await this.store.putJSON(FOLDERS, [...have, ...incoming.filter((f) => !ids.has(f.id)).map((f) => ({ ...f, profileId: this.store.profileId }))]);
+    });
+  }
+
   async listDocuments(folderId: Id | null): Promise<DocumentMeta[]> {
     return (await this.index()).filter((d) => d.folderId === folderId).sort((a, b) => b.updatedAt - a.updatedAt);
   }

@@ -9,6 +9,9 @@
   import ImportButton from '../components/ImportButton.svelte';
   import CaptureDialog from '../components/CaptureDialog.svelte';
   import IncomingPrompt from '../components/IncomingPrompt.svelte';
+  import BackupDialog from '../components/BackupDialog.svelte';
+  import RestoreDialog from '../components/RestoreDialog.svelte';
+  import { backupFileName, exportAll, exportDoc, importBackup, isBackupFile, runExport } from '../lib/backup-flow';
   import { currentServices } from '../platform';
   import type { CaptureResult } from '../platform/capture';
   import { importFile, makeImporter } from '../lib/import-export';
@@ -35,8 +38,24 @@
   let importing = $state<string | null>(null);
   let dragOver = $state(false);
 
+  let backup = $state<null | { doc: DocumentMeta | null }>(null);
+  let restoring = $state<File | null>(null);
+  let pnoteInput = $state<HTMLInputElement>();
+
+  async function doBackup(password: string, how: 'save' | 'share') {
+    const exp = currentServices().exporter;
+    const target = backup?.doc ?? null;
+    const name = backupFileName(target ? target.title : author.name);
+    await runExport(exp, how, name, target ? exportDoc(lib, blobs, target.id, password, author)
+      : exportAll(lib, blobs, password, author, (d, t) => (importing = `กำลังสำรอง ${d}/${t} เอกสาร`)));
+    importing = null;
+    backup = null;
+  }
+
   async function importFiles(files: File[]) {
     error = '';
+    const backups = files.filter(isBackupFile);
+    if (backups.length) { restoring = backups[0]; files = files.filter((f) => !isBackupFile(f)); if (!files.length) return; }
     let lastOk: DocumentMeta | null = null;
     for (const f of files) {
       importing = `กำลังนำเข้า ${f.name}`;
@@ -130,6 +149,16 @@
 </script>
 
 <IncomingPrompt incoming={currentServices().incoming} profileName={author.name} onImport={(f) => importFiles([f])} />
+{#if backup}
+  <BackupDialog heading={backup.doc ? `ส่งออก "${backup.doc.title}" เป็น .pnote` : 'สำรองโปรไฟล์ทั้งหมด'} canShare={currentServices().exporter.canShare}
+    onSubmit={doBackup} onCancel={() => (backup = null)} />
+{/if}
+{#if restoring}
+  <RestoreDialog file={restoring} run={(pw, choose) => importBackup(lib, blobs, restoring!, pw, author, choose)}
+    onDone={async (out) => { restoring = null; await refresh(); error = out.length ? '' : 'ไม่มีเอกสารที่นำเข้าได้'; }} onCancel={() => (restoring = null)} />
+{/if}
+<input bind:this={pnoteInput} type="file" hidden accept=".pnote,application/x-pnote-backup" data-testid="pnote-input"
+  onchange={(e) => { const f = (e.currentTarget as HTMLInputElement).files?.[0]; (e.currentTarget as HTMLInputElement).value = ''; if (f) restoring = f; }} />
 {#if capturing}
   <CaptureDialog capture={currentServices().capture} onCaptured={saveCapture} onCancel={() => (capturing = false)} />
 {/if}
@@ -147,6 +176,8 @@
       <button onclick={() => (capturing = true)}>＋ บันทึกหน้าเว็บ</button>
       <button onclick={() => { dialog = 'folder'; newTitle = ''; }}>＋ โฟลเดอร์</button>
       <button class="primary" onclick={() => { dialog = 'notebook'; newTitle = 'สมุดใหม่'; }}>＋ สมุดใหม่</button>
+      <button onclick={() => pnoteInput?.click()}>นำเข้าไฟล์ .pnote</button>
+      <button onclick={() => (backup = { doc: null })}>สำรองโปรไฟล์ทั้งหมด</button>
       <button onclick={onLock}>🔒 ล็อก</button>
     </header>
 
@@ -173,6 +204,7 @@
           </button>
           <div class="actions">
             <button class="small" onclick={() => rename(d)}>เปลี่ยนชื่อ</button>
+            <button class="small" aria-label="ส่งออก {d.title} เป็น .pnote" onclick={() => (backup = { doc: d })}>ส่งออกเป็น .pnote</button>
             <select aria-label="ย้ายไปโฟลเดอร์" value={d.folderId ?? ''} onchange={(e) => move(d, (e.currentTarget as HTMLSelectElement).value)}>
               <option value="">ห้องสมุด</option>
               {#each folders as f (f.id)}<option value={f.id}>{f.name}</option>{/each}

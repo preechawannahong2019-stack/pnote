@@ -37,7 +37,7 @@ public class PnoteIncomingPlugin: CAPPlugin, CAPBridgedPlugin {
         case "png": mime = "image/png"
         case "jpg", "jpeg": mime = "image/jpeg"
         case "heic", "heif": mime = "image/heic"
-        case "pnote": mime = "application/x-pnote"
+        case "pnote": mime = "application/x-pnote-backup"
         default: mime = ""
         }
         notifyListeners("file", data: ["name": name, "mime": mime, "path": out.path.replacingOccurrences(of: caches.path + "/", with: "")], retainUntilConsumed: true)

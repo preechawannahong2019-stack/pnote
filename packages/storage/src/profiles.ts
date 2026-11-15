@@ -112,6 +112,11 @@ export class ProfileService {
     return { profile: summary(rec), recoveryCode };
   }
 
+  /** A new profile to restore a backup into: same rules as create(); the caller then imports the documents. */
+  createFromBackup(name: string, secret: string, avatarColor: string): Promise<{ profile: ProfileSummary; recoveryCode: string }> {
+    return this.create(name, secret, avatarColor);
+  }
+
   unlock(id: Id, secret: string): Promise<UnlockResult> {
     return this.exclusive(id, async () => {
       const rec = await this.read(id);

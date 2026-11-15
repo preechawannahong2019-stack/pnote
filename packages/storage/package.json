@@ -8,7 +8,7 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "hash-wasm": "^4.13.0",
-    "@pnote/core": "*"
+    "@pnote/core": "*",
+    "hash-wasm": "^4.13.0"
   }
 }
