@@ -103,3 +103,54 @@ describe('Library', () => {
     await expect(lib.savePresets([...ten, mk(10)])).rejects.toBeInstanceOf(TooManyPresetsError);
   });
 });
+
+describe('review fixes: two tabs on one library', () => {
+  function stubLocks() {
+    const queues = new Map<string, Promise<unknown>>();
+    vi.stubGlobal('navigator', {
+      locks: {
+        request: (name: string, cb: () => Promise<unknown>) => {
+          const prev = queues.get(name) ?? Promise.resolve();
+          const next = prev.then(cb, cb);
+          queues.set(name, next.catch(() => undefined));
+          return next;
+        },
+      },
+    });
+  }
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('keeps both notebooks created at the same time in two tabs', async () => {
+    stubLocks();
+    const adapter = new MemoryAdapter();
+    const key = await generateDataKey();
+    const tab1 = new Library(new EncryptedStore(adapter, key, 'p1'), author);
+    const tab2 = new Library(new EncryptedStore(adapter, key, 'p1'), author);
+    await Promise.all([tab1.createNotebook('one', null), tab2.createNotebook('two', null), tab1.createFolder('f1', null), tab2.createFolder('f2', null)]);
+    expect((await tab1.listDocuments(null)).map((d) => d.title).sort()).toEqual(['one', 'two']);
+    expect((await tab1.listFolders()).map((f) => f.name).sort()).toEqual(['f1', 'f2']);
+  });
+
+  it('saving an open document does not revert a rename made in another tab', async () => {
+    const { lib, store } = await setup();
+    const meta = await lib.createNotebook('old', null);
+    const opened = await lib.openDocument(meta.id);
+    const other = new Library(store, author);
+    await other.renameDocument(meta.id, 'new');
+    await lib.saveDocument(opened.meta, opened.state, opened.audit, []);
+    expect((await lib.openDocument(meta.id)).meta.title).toBe('new');
+    expect((await lib.listDocuments(null)).map((d) => d.title)).toEqual(['new']);
+  });
+});
+
+describe('review fixes: audit verified on open', () => {
+  it('reports a broken audit chain', async () => {
+    const { lib, store } = await setup();
+    const meta = await lib.createNotebook('x', null);
+    expect((await lib.openDocument(meta.id)).auditOk).toBe(true);
+    const audit = (await store.getJSON<{ objectIds: string[] }[]>(`documents/${meta.id}/audit.json`))!;
+    audit[0].objectIds = ['forged'];
+    await store.putJSON(`documents/${meta.id}/audit.json`, audit);
+    expect((await lib.openDocument(meta.id)).auditOk).toBe(false);
+  });
+});

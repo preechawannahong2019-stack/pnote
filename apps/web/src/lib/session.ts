@@ -15,6 +15,8 @@ function pagesTouched(c: Command): Id[] {
   }
 }
 
+export const SAVE_RETRY_MS = 5_000;
+
 export interface SessionOptions { lock?: (docId: Id) => Promise<DocLock>; now?: () => number; autosaveMs?: number }
 
 export class EditorSession {
@@ -24,6 +26,9 @@ export class EditorSession {
   private chain: Promise<void> = Promise.resolve();
   private autosave: ReturnType<typeof createAutosave>;
   private now: () => number;
+  private errorListeners = new Set<(e: unknown) => void>();
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  saveFailed = false;
 
   private constructor(
     private lib: Library,
@@ -33,6 +38,7 @@ export class EditorSession {
     audit: AuditEntry[],
     private lock: DocLock,
     opts: SessionOptions,
+    readonly auditBroken = false,
   ) {
     this.history = new History(state);
     this.audit = audit;
@@ -42,8 +48,13 @@ export class EditorSession {
 
   static async open(lib: Library, author: Author, docId: Id, opts: SessionOptions = {}): Promise<EditorSession> {
     const lock = await (opts.lock ?? acquireDocLock)(docId);
-    const { meta, state, audit } = await lib.openDocument(docId);
-    return new EditorSession(lib, author, meta, state, audit, lock, opts);
+    try {
+      const { meta, state, audit, auditOk } = await lib.openDocument(docId);
+      return new EditorSession(lib, author, meta, state, audit, lock, opts, !auditOk);
+    } catch (e) {
+      if (!lock.readOnly) lock.release();
+      throw e;
+    }
   }
 
   get readOnly(): boolean { return this.lock.readOnly; }
@@ -56,11 +67,13 @@ export class EditorSession {
   private record(records: AuditRecord[] | null, pages: Id[]): Promise<void> {
     if (!records) return this.chain;
     pages.forEach((p) => this.dirty.add(p));
+    const time = this.now();
+    // schedule synchronously so a pagehide that arrives before the audit hash resolves still saves
+    this.autosave.schedule();
     return this.enqueue(async () => {
       for (const r of records) {
-        this.audit = await appendAudit(this.audit, { time: this.now(), author: this.author, action: r.action, objectIds: r.objectIds });
+        this.audit = await appendAudit(this.audit, { time, author: this.author, action: r.action, objectIds: r.objectIds });
       }
-      this.autosave.schedule();
     });
   }
 
@@ -79,28 +92,48 @@ export class EditorSession {
     return this.record(this.history.redo(), this.history.state.pages.map((p) => p.id));
   }
 
+  onSaveError(cb: (e: unknown) => void): () => void {
+    this.errorListeners.add(cb);
+    return () => this.errorListeners.delete(cb);
+  }
+
   private async save(): Promise<void> {
     await this.chain;
     const dirty = [...this.dirty];
     this.dirty.clear();
-    await this.lib.saveDocument(this.meta, this.history.state, this.audit, dirty);
-    this.meta = { ...this.meta, pages: this.history.state.pages };
+    try {
+      await this.lib.saveDocument(this.meta, this.history.state, this.audit, dirty);
+      this.meta = { ...this.meta, pages: this.history.state.pages };
+      this.saveFailed = false;
+      if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = null; }
+    } catch (e) {
+      dirty.forEach((p) => this.dirty.add(p)); // keep them for the next attempt
+      this.saveFailed = true;
+      this.errorListeners.forEach((cb) => cb(e));
+      if (!this.retryTimer) {
+        this.retryTimer = setTimeout(() => { this.retryTimer = null; this.autosave.schedule(); }, SAVE_RETRY_MS);
+      }
+      throw e;
+    }
   }
 
   /** Wait for queued audit writes and any running save. */
   async idle(): Promise<void> {
     await this.chain;
-    await this.autosave.flush();
+    await this.autosave.flush().catch(() => {});
   }
 
   async flushNow(): Promise<void> {
     if (this.readOnly) return;
     await this.chain;
+    if (this.saveFailed) this.autosave.schedule();
     await this.autosave.flush();
   }
 
+  /** Always resolves; a failed final save has already been reported through onSaveError. */
   async close(): Promise<void> {
-    await this.flushNow();
+    try { await this.flushNow(); } catch { /* reported */ }
+    if (this.retryTimer) clearTimeout(this.retryTimer);
     this.autosave.dispose();
     if (!this.lock.readOnly) this.lock.release();
   }

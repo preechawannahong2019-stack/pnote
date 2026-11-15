@@ -44,3 +44,16 @@ describe('EncryptedStore', () => {
     expect(await s.getJSON('a.json')).toBeNull();
   });
 });
+
+describe('review fixes: ciphertext bound to its path', () => {
+  it('rejects a file copied over another path', async () => {
+    const { TamperedError } = await import('../src/crypto');
+    const adapter = new MemoryAdapter();
+    const s = new EncryptedStore(adapter, await generateDataKey(), 'p1');
+    await s.putJSON('documents/a/pages/1.bin', { v: 'page one' });
+    await s.putJSON('documents/a/pages/2.bin', { v: 'page two' });
+    await adapter.put('/p1/documents/a/pages/2.bin', (await adapter.get('/p1/documents/a/pages/1.bin'))!);
+    await expect(s.getJSON('documents/a/pages/2.bin')).rejects.toBeInstanceOf(TamperedError);
+    expect(await s.getJSON('documents/a/pages/1.bin')).toEqual({ v: 'page one' });
+  });
+});

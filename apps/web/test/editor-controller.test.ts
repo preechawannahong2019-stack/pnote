@@ -93,6 +93,18 @@ describe('EditorController', () => {
     expect(state().shapes[pageId][0].hidden).toBe(true);
   });
 
+  it('a pause at the start of a stroke does not turn handwriting into a shape', async () => {
+    const { ctrl, pageId, state, visible } = await setup();
+    t += 8;
+    const acts: RouterAction[] = [{ kind: 'stroke-begin', pointerId: 1, input: 'pen', x: 10, y: 10, p: 0.5, t }];
+    for (let ms = 8; ms <= 600; ms += 8) { t += 8; acts.push({ kind: 'stroke-point', pointerId: 1, x: 10, y: 10, p: 0.5, t }); }
+    for (let i = 1; i <= 20; i++) { t += 8; acts.push({ kind: 'stroke-point', pointerId: 1, x: 10 + i * 5, y: 10, p: 0.5, t }); }
+    acts.push({ kind: 'stroke-end', pointerId: 1 });
+    await ctrl.onActions(pageId, acts, t);
+    expect(visible()).toHaveLength(1);
+    expect(state().shapes[pageId]).toHaveLength(0);
+  });
+
   it('auto shapes off keeps the hand stroke', async () => {
     const { ctrl, pageId, state, visible } = await setup({ scribbleToErase: true, autoShapes: false });
     await ctrl.onActions(pageId, circleWithHold(), t);
@@ -156,5 +168,28 @@ describe('EditorController', () => {
     await ctrl.addPage('grid');
     expect(state().pages).toHaveLength(2);
     expect(state().pages[1].source).toEqual({ type: 'blank', template: 'grid' });
+  });
+});
+
+describe('review fixes: selection bounds and render plan', () => {
+  it('selectionBounds handles a very large selection', async () => {
+    const { selectionBounds } = await import('../src/lib/editor-controller');
+    const n = 300_000;
+    const pts = new Float32Array(n * 4);
+    for (let i = 0; i < n; i++) { pts[i * 4] = i % 1000; pts[i * 4 + 1] = Math.floor(i / 1000); }
+    const big = { id: 'big', pageId: 'p', tool: 'pen' as const, style: { color: '#000', width: 1, opacity: 1, pressureCurve: 'normal' as const, taperStart: 0, taperEnd: 0, smoothing: 0 }, points: pts, input: 'pen' as const, author, createdAt: 1 };
+    expect(selectionBounds([big], [], ['big'])).toEqual({ minX: 0, minY: 0, maxX: 999, maxY: 299 });
+    expect(selectionBounds([big], [], [])).toBeNull();
+  });
+
+  it('render plan repaints the base layer only when marked', async () => {
+    const { createRenderPlan } = await import('../src/lib/render-plan');
+    const plan = createRenderPlan();
+    expect(plan.take()).toEqual({ base: true, live: true });
+    plan.markLive();
+    expect(plan.take()).toEqual({ base: false, live: true });
+    expect(plan.take()).toEqual({ base: false, live: false });
+    plan.markBase();
+    expect(plan.take()).toEqual({ base: true, live: true });
   });
 });

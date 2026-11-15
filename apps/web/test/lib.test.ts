@@ -164,3 +164,98 @@ describe('EditorSession', () => {
     expect((await l.openDocument(meta.id)).state.strokes[meta.pages[0].id]).toEqual([]);
   });
 });
+
+describe('review fixes: saving', () => {
+  async function lib() {
+    const store = new EncryptedStore(new MemoryAdapter(), await generateDataKey(), 'p1');
+    return new Library(store, author);
+  }
+  const writable = async () => ({ readOnly: false as const, release: () => {} });
+
+  it('keeps dirty pages after a failed save, reports the error, and saves on retry', async () => {
+    const l = await lib();
+    const meta = await l.createNotebook('x', null);
+    const s = await EditorSession.open(l, author, meta.id, { lock: writable });
+    const errors: unknown[] = [];
+    s.onSaveError((e) => errors.push(e));
+    const real = l.saveDocument.bind(l);
+    const spy = vi.spyOn(l, 'saveDocument').mockRejectedValueOnce(new Error('quota'));
+    await s.run({ type: 'addStroke', stroke: stroke('s1', meta.pages[0].id) });
+    await s.flushNow().catch(() => {});
+    expect(errors).toHaveLength(1);
+    expect(s.saveFailed).toBe(true);
+    spy.mockImplementation(real);
+    await s.flushNow();
+    expect(s.saveFailed).toBe(false);
+    expect((await l.openDocument(meta.id)).state.strokes[meta.pages[0].id]).toHaveLength(1);
+    await s.close();
+  });
+
+  it('close resolves even when the final save fails', async () => {
+    const l = await lib();
+    const meta = await l.createNotebook('x', null);
+    const s = await EditorSession.open(l, author, meta.id, { lock: writable });
+    vi.spyOn(l, 'saveDocument').mockRejectedValue(new Error('quota'));
+    await s.run({ type: 'addStroke', stroke: stroke('s1', meta.pages[0].id) });
+    await expect(s.close()).resolves.toBeUndefined();
+  });
+
+  it('pagehide right after a stroke saves it even before the audit hash resolves', async () => {
+    const l = await lib();
+    const meta = await l.createNotebook('x', null);
+    const s = await EditorSession.open(l, author, meta.id, { lock: writable });
+    const save = vi.spyOn(l, 'saveDocument');
+    vi.useFakeTimers();
+    const p = s.run({ type: 'addStroke', stroke: stroke('s1', meta.pages[0].id) });
+    window.dispatchEvent(new Event('pagehide'));
+    await p;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(save).toHaveBeenCalledTimes(1); // saved by pagehide, not by the 500 ms debounce
+    vi.useRealTimers();
+    await s.idle();
+    const again = await l.openDocument(meta.id);
+    expect(again.state.strokes[meta.pages[0].id]).toHaveLength(1);
+    expect(again.audit.map((a) => a.action)).toContain('stroke.add');
+    await s.close();
+  });
+});
+
+describe('review fixes: idle lock across device sleep', () => {
+  it('locks on wake when the wall clock passed the timeout while timers were suspended', () => {
+    let now = 1_000_000;
+    const onLock = vi.fn();
+    const l = createIdleLock(DEFAULT_IDLE_MS, onLock, () => now);
+    now += DEFAULT_IDLE_MS + 1; // device slept; no timer fired
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(onLock).toHaveBeenCalledTimes(1);
+    l.dispose();
+  });
+  it('does not lock on wake before the timeout', () => {
+    let now = 1_000_000;
+    const onLock = vi.fn();
+    const l = createIdleLock(DEFAULT_IDLE_MS, onLock, () => now);
+    now += 1000;
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(onLock).not.toHaveBeenCalled();
+    l.dispose();
+  });
+});
+
+describe('review fixes: session audit check', () => {
+  it('flags a broken audit chain and releases the lock when open fails', async () => {
+    const store = new EncryptedStore(new MemoryAdapter(), await generateDataKey(), 'p1');
+    const l = new Library(store, author);
+    const meta = await l.createNotebook('x', null);
+    const audit = (await store.getJSON<{ objectIds: string[] }[]>(`documents/${meta.id}/audit.json`))!;
+    audit[0].objectIds = ['forged'];
+    await store.putJSON(`documents/${meta.id}/audit.json`, audit);
+    const s = await EditorSession.open(l, author, meta.id, { lock: async () => ({ readOnly: false, release: () => {} }) });
+    expect(s.auditBroken).toBe(true);
+    await s.close();
+    const release = vi.fn();
+    vi.spyOn(l, 'openDocument').mockRejectedValueOnce(new Error('bad'));
+    await expect(EditorSession.open(l, author, meta.id, { lock: async () => ({ readOnly: false, release }) })).rejects.toThrow();
+    expect(release).toHaveBeenCalled();
+  });
+});

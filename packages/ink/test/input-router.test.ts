@@ -112,3 +112,23 @@ it('setMode cancels an active touch stroke when switching to pen mode', () => {
   r.setMode('pen');
   expect(kinds(r.handle(s('move', 2, 'touch', 5, 5)))).not.toContain('stroke-point');
 });
+
+describe('review fixes: palm lifted during a pen stroke', () => {
+  it('a palm lifted before pen-up leaves no ghost touch (pan stays a pan)', () => {
+    const r = new InputRouter('pen');
+    feed(r, [s('down', 2, 'touch', 100, 100), s('down', 1, 'pen', 0, 0), s('up', 2, 'touch', 100, 100), s('up', 1, 'pen', 0, 0)]);
+    const out = feed(r, [s('down', 3, 'touch', 0, 0), s('move', 3, 'touch', 10, 0)]);
+    expect(out).toEqual([{ kind: 'pan', dx: 10, dy: 0 }]);
+  });
+  it('a palm cancelled before pen-up still lets a finger draw in finger mode', () => {
+    const r = new InputRouter('pen');
+    feed(r, [s('down', 2, 'touch', 100, 100), s('down', 1, 'pen', 0, 0), s('cancel', 2, 'touch', 100, 100), s('up', 1, 'pen', 0, 0)]);
+    r.setMode('finger');
+    expect(kinds(feed(r, [s('down', 4, 'touch', 5, 5), s('up', 4, 'touch', 5, 5)]))).toEqual(['stroke-begin', 'stroke-end']);
+  });
+  it('a palm that stays down after pen-up does not cause a pan jump', () => {
+    const r = new InputRouter('pen');
+    feed(r, [s('down', 2, 'touch', 100, 100), s('move', 2, 'touch', 140, 100), s('down', 1, 'pen', 0, 0), s('up', 1, 'pen', 0, 0)]);
+    expect(feed(r, [s('move', 2, 'touch', 141, 100)])).toEqual([]);
+  });
+});

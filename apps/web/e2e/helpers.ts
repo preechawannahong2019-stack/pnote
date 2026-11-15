@@ -26,6 +26,7 @@ export async function newNotebook(page: Page, title: string, template = 'lined')
   await page.getByLabel('กระดาษ').selectOption(template);
   await page.getByRole('button', { name: 'สร้าง', exact: true }).click();
   await expect(page.getByTestId('canvas-host')).toBeVisible();
+  await expect(page.getByTestId('toolbar')).toBeVisible(); // document session is open
 }
 
 /** Count dark pixels in a region of the ink canvas. */

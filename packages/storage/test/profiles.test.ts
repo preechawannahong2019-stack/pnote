@@ -130,3 +130,38 @@ describe('ProfileService', () => {
     expect((await svc.list())[0].name).toBe('B');
   });
 });
+
+describe('review fixes: keys and cross-tab attempts', () => {
+  it('unlock and recover return a non-extractable data key', async () => {
+    const { svc } = setup();
+    const { profile, recoveryCode } = await svc.create('A', PW, '#000');
+    const r = await svc.unlock(profile.id, PW);
+    if (!r.ok) throw new Error();
+    expect(r.key.extractable).toBe(false);
+    const r2 = await svc.recover(profile.id, recoveryCode, 'new-password-1');
+    if (!r2.ok) throw new Error();
+    expect(r2.key.extractable).toBe(false);
+  });
+
+  it('counts wrong attempts made in parallel from two tabs', async () => {
+    // a minimal shared Web Locks implementation, as two tabs of one origin would see
+    const queues = new Map<string, Promise<unknown>>();
+    const locks = {
+      request: (name: string, cb: () => Promise<unknown>) => {
+        const prev = queues.get(name) ?? Promise.resolve();
+        const next = prev.then(cb, cb);
+        queues.set(name, next.catch(() => undefined));
+        return next;
+      },
+    };
+    vi.stubGlobal('navigator', { locks });
+    const adapter = new MemoryAdapter();
+    const tab1 = new ProfileService(adapter, WebNoDeviceKey);
+    const { profile } = await tab1.create('A', PW, '#000');
+    const tab2 = new ProfileService(adapter, WebNoDeviceKey);
+    await Promise.all([tab1.unlock(profile.id, 'nope-nope'), tab2.unlock(profile.id, 'nope-nope'), tab1.unlock(profile.id, 'nope-nope'), tab2.unlock(profile.id, 'nope-nope')]);
+    expect(await tab1.unlock(profile.id, 'nope-nope')).toMatchObject({ attemptsLeft: 5 });
+    vi.unstubAllGlobals();
+  });
+
+});

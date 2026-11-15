@@ -41,9 +41,10 @@ export async function wrapDataKey(dataKey: CryptoKey, kek: CryptoKey): Promise<U
   return new Uint8Array(await crypto.subtle.wrapKey('raw', dataKey, kek, 'AES-KW'));
 }
 
-export async function unwrapDataKey(wrapped: Uint8Array, kek: CryptoKey): Promise<CryptoKey> {
+/** Session keys are non-extractable; pass extractable=true only to re-wrap the key (recovery). */
+export async function unwrapDataKey(wrapped: Uint8Array, kek: CryptoKey, extractable = false): Promise<CryptoKey> {
   try {
-    return await crypto.subtle.unwrapKey('raw', buf(wrapped), kek, 'AES-KW', { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+    return await crypto.subtle.unwrapKey('raw', buf(wrapped), kek, 'AES-KW', { name: 'AES-GCM', length: 256 }, extractable, ['encrypt', 'decrypt']);
   } catch {
     throw new WrongKeyError();
   }
@@ -63,17 +64,20 @@ function readHeader(data: Uint8Array): Header {
   return { chunkSize: v.getUint32(4, true), count: v.getUint32(8, true), plainLength: Number(v.getBigUint64(12, true)) };
 }
 
-/** AAD binds each chunk to its position and to the file's chunk count and length. */
-function aad(index: number, h: Header): Uint8Array<ArrayBuffer> {
-  const a = new Uint8Array(16);
+const EMPTY = new Uint8Array(0);
+
+/** AAD binds each chunk to its position, the file's chunk count and length, and a caller context (e.g. the file path). */
+function aad(index: number, h: Header, context: Uint8Array): Uint8Array<ArrayBuffer> {
+  const a = new Uint8Array(16 + context.length);
   const v = new DataView(a.buffer);
   v.setUint32(0, index, true);
   v.setUint32(4, h.count, true);
   v.setBigUint64(8, BigInt(h.plainLength), true);
+  a.set(context, 16);
   return a;
 }
 
-export async function encryptBytes(key: CryptoKey, plain: Uint8Array): Promise<Uint8Array> {
+export async function encryptBytes(key: CryptoKey, plain: Uint8Array, context: Uint8Array = EMPTY): Promise<Uint8Array> {
   const count = Math.max(1, Math.ceil(plain.length / CHUNK_SIZE));
   const h: Header = { chunkSize: CHUNK_SIZE, count, plainLength: plain.length };
   const parts: Uint8Array[] = [];
@@ -81,7 +85,7 @@ export async function encryptBytes(key: CryptoKey, plain: Uint8Array): Promise<U
   for (let i = 0; i < count; i++) {
     const iv = randomBytes(IV);
     const chunk = plain.subarray(i * CHUNK_SIZE, Math.min(plain.length, (i + 1) * CHUNK_SIZE));
-    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: buf(iv), additionalData: aad(i, h) }, key, buf(chunk.slice())));
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: buf(iv), additionalData: aad(i, h, context) }, key, buf(chunk.slice())));
     parts.push(iv, ct);
     total += IV + ct.length;
   }
@@ -104,30 +108,30 @@ function chunkOffset(h: Header, index: number): number {
   return HEADER + index * (IV + h.chunkSize + TAG);
 }
 
-async function decryptAt(key: CryptoKey, data: Uint8Array, h: Header, index: number): Promise<Uint8Array> {
+async function decryptAt(key: CryptoKey, data: Uint8Array, h: Header, index: number, context: Uint8Array): Promise<Uint8Array> {
   const off = chunkOffset(h, index);
   const len = IV + chunkPlainLength(h, index) + TAG;
   if (off + len > data.length) throw new TamperedError('file is truncated');
   try {
     const iv = data.slice(off, off + IV);
     const ct = data.slice(off + IV, off + len);
-    return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv, additionalData: aad(index, h) }, key, ct));
+    return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv, additionalData: aad(index, h, context) }, key, ct));
   } catch {
     throw new TamperedError();
   }
 }
 
-export async function decryptChunk(key: CryptoKey, data: Uint8Array, index: number): Promise<Uint8Array> {
+export async function decryptChunk(key: CryptoKey, data: Uint8Array, index: number, context: Uint8Array = EMPTY): Promise<Uint8Array> {
   const h = readHeader(data);
   if (index < 0 || index >= h.count) throw new RangeError(`chunk ${index} out of range`);
-  return decryptAt(key, data, h, index);
+  return decryptAt(key, data, h, index, context);
 }
 
-export async function decryptBytes(key: CryptoKey, data: Uint8Array): Promise<Uint8Array> {
+export async function decryptBytes(key: CryptoKey, data: Uint8Array, context: Uint8Array = EMPTY): Promise<Uint8Array> {
   const h = readHeader(data);
   if (h.chunkSize !== CHUNK_SIZE || h.count !== Math.max(1, Math.ceil(h.plainLength / h.chunkSize))) throw new TamperedError('bad header');
   const out = new Uint8Array(h.plainLength);
-  for (let i = 0; i < h.count; i++) out.set(await decryptAt(key, data, h, i), i * h.chunkSize);
+  for (let i = 0; i < h.count; i++) out.set(await decryptAt(key, data, h, i, context), i * h.chunkSize);
   if (chunkOffset(h, h.count - 1) + IV + chunkPlainLength(h, h.count - 1) + TAG !== data.length) throw new TamperedError('trailing data');
   return out;
 }

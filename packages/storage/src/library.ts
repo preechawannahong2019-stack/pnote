@@ -1,4 +1,4 @@
-import { appendAudit, type AuditEntry } from '@pnote/core/audit';
+import { appendAudit, verifyAudit, type AuditEntry } from '@pnote/core/audit';
 import type { DocState } from '@pnote/core/doc-state';
 import { newId } from '@pnote/core/ids';
 import { decodePage, encodePage } from '@pnote/core/serialize';
@@ -25,8 +25,21 @@ export function blankPage(template: PageTemplate = 'plain'): PageRef {
   return { id: newId(), source: { type: 'blank', template }, widthPt: A4.widthPt, heightPt: A4.heightPt };
 }
 
+const localQueues = new Map<string, Promise<unknown>>();
+
 export class Library {
   constructor(private store: EncryptedStore, private author: Author, private now: () => number = () => Date.now()) {}
+
+  /** Serialize read-modify-write of shared library files across tabs (Web Locks) and within this tab. */
+  private locked<T>(fn: () => Promise<T>): Promise<T> {
+    const name = `pnote-lib-${this.store.profileId}`;
+    const locks = (globalThis.navigator as (Navigator & { locks?: LockManager }) | undefined)?.locks;
+    const run = locks ? () => locks.request(name, fn) as Promise<T> : fn;
+    const prev = localQueues.get(name) ?? Promise.resolve();
+    const next = prev.then(run, run);
+    localQueues.set(name, next.catch(() => undefined));
+    return next;
+  }
 
   private async folders(): Promise<Folder[]> { return (await this.store.getJSON<Folder[]>(FOLDERS)) ?? []; }
   private async index(): Promise<DocumentMeta[]> { return (await this.store.getJSON<DocumentMeta[]>(INDEX)) ?? []; }
@@ -45,21 +58,27 @@ export class Library {
 
   listFolders(): Promise<Folder[]> { return this.folders(); }
 
-  async createFolder(name: string, parentId: Id | null): Promise<Folder> {
-    const f: Folder = { id: newId(), profileId: this.store.profileId, parentId, name };
-    await this.store.putJSON(FOLDERS, [...(await this.folders()), f]);
-    return f;
+  createFolder(name: string, parentId: Id | null): Promise<Folder> {
+    return this.locked(async () => {
+      const f: Folder = { id: newId(), profileId: this.store.profileId, parentId, name };
+      await this.store.putJSON(FOLDERS, [...(await this.folders()), f]);
+      return f;
+    });
   }
 
-  async renameFolder(id: Id, name: string): Promise<void> {
-    await this.store.putJSON(FOLDERS, (await this.folders()).map((f) => (f.id === id ? { ...f, name } : f)));
+  renameFolder(id: Id, name: string): Promise<void> {
+    return this.locked(async () => {
+      await this.store.putJSON(FOLDERS, (await this.folders()).map((f) => (f.id === id ? { ...f, name } : f)));
+    });
   }
 
-  async deleteFolder(id: Id): Promise<void> {
-    const folders = await this.folders();
-    const hasChildren = folders.some((f) => f.parentId === id) || (await this.index()).some((d) => d.folderId === id);
-    if (hasChildren) throw new FolderNotEmptyError();
-    await this.store.putJSON(FOLDERS, folders.filter((f) => f.id !== id));
+  deleteFolder(id: Id): Promise<void> {
+    return this.locked(async () => {
+      const folders = await this.folders();
+      const hasChildren = folders.some((f) => f.parentId === id) || (await this.index()).some((d) => d.folderId === id);
+      if (hasChildren) throw new FolderNotEmptyError();
+      await this.store.putJSON(FOLDERS, folders.filter((f) => f.id !== id));
+    });
   }
 
   async listDocuments(folderId: Id | null): Promise<DocumentMeta[]> {
@@ -83,13 +102,13 @@ export class Library {
       createdAt: t,
       updatedAt: t,
     };
-    await this.putMeta(meta);
     const audit = await appendAudit([], { time: t, author: this.author, action: 'doc.create', objectIds: [meta.id] });
     await this.store.putJSON(`${docDir(meta.id)}/audit.json`, audit);
+    await this.locked(() => this.putMeta(meta));
     return meta;
   }
 
-  async openDocument(id: Id): Promise<{ meta: DocumentMeta; state: DocState; audit: AuditEntry[] }> {
+  async openDocument(id: Id): Promise<{ meta: DocumentMeta; state: DocState; audit: AuditEntry[]; auditOk: boolean }> {
     const meta = await this.getMeta(id);
     const state: DocState = { pages: meta.pages, strokes: {}, shapes: {} };
     for (const p of meta.pages) { state.strokes[p.id] = []; state.shapes[p.id] = []; }
@@ -103,7 +122,8 @@ export class Library {
       state.shapes[pageId] = shapes;
     }
     const audit = (await this.store.getJSON<AuditEntry[]>(`${docDir(id)}/audit.json`)) ?? [];
-    return { meta, state, audit };
+    const auditOk = (await verifyAudit(audit)).ok;
+    return { meta, state, audit, auditOk };
   }
 
   async saveDocument(meta: DocumentMeta, state: DocState, audit: AuditEntry[], dirtyPageIds: Id[]): Promise<void> {
@@ -111,21 +131,25 @@ export class Library {
       await this.store.putBytes(pagePath(meta.id, pid), encodePage(state.strokes[pid] ?? [], state.shapes[pid] ?? []));
     }
     await this.store.putJSON(`${docDir(meta.id)}/audit.json`, audit);
-    await this.putMeta({ ...meta, pages: state.pages, updatedAt: this.now() });
+    // re-read so a rename/move made elsewhere is not reverted; this save only owns pages
+    await this.locked(async () => {
+      const current = (await this.store.getJSON<DocumentMeta>(`${docDir(meta.id)}/meta.json`)) ?? meta;
+      await this.putMeta({ ...current, pages: state.pages, updatedAt: this.now() });
+    });
   }
 
-  async renameDocument(id: Id, title: string): Promise<void> {
-    await this.putMeta({ ...(await this.getMeta(id)), title, updatedAt: this.now() });
+  renameDocument(id: Id, title: string): Promise<void> {
+    return this.locked(async () => this.putMeta({ ...(await this.getMeta(id)), title, updatedAt: this.now() }));
   }
 
-  async moveDocument(id: Id, folderId: Id | null): Promise<void> {
-    await this.putMeta({ ...(await this.getMeta(id)), folderId, updatedAt: this.now() });
+  moveDocument(id: Id, folderId: Id | null): Promise<void> {
+    return this.locked(async () => this.putMeta({ ...(await this.getMeta(id)), folderId, updatedAt: this.now() }));
   }
 
   async listPresets(): Promise<PenPreset[]> { return (await this.store.getJSON<PenPreset[]>(PRESETS)) ?? []; }
 
   async savePresets(p: PenPreset[]): Promise<void> {
     if (p.length > MAX_PRESETS) throw new TooManyPresetsError();
-    await this.store.putJSON(PRESETS, p);
+    await this.locked(() => this.store.putJSON(PRESETS, p));
   }
 }

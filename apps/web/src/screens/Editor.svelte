@@ -12,6 +12,7 @@
   import { EditorSession } from '../lib/session';
   import { loadToolbarState, saveToolbarState, type ToolbarState } from '../lib/toolbar-state';
   import { loadSettings, saveSettings } from '../lib/settings';
+  import { createRenderPlan } from '../lib/render-plan';
 
   let { lib, author, docId, onClose }: { lib: Library; author: Author; docId: Id; onClose: () => void } = $props();
 
@@ -44,17 +45,31 @@
     mode = ctrl.mode; tool = ctrl.tool; style = { ...ctrl.style };
   }
 
+  let openError = $state('');
+  let saveError = $state(false);
+  let auditBroken = $state(false);
+  let destroyed = false;
+
   (async () => {
-    const s = await EditorSession.open(lib, author, docId);
+    let s: EditorSession;
+    try {
+      s = await EditorSession.open(lib, author, docId);
+    } catch {
+      openError = 'เปิดเอกสารไม่สำเร็จ ไฟล์อาจเสียหายหรือถูกแก้ไข';
+      return;
+    }
+    if (destroyed) { await s.close(); return; }
     ctrl = new EditorController(s, { scribbleToErase: settings.scribble, autoShapes: settings.autoShapes });
-    ctrl.mode = window.matchMedia?.('(pointer: coarse)').matches ? 'pen' : 'pen';
     router = new InputRouter(ctrl.mode);
-    s.history.onChange(() => { version++; requestRender(); });
-    presets = await lib.listPresets();
+    s.history.onChange(() => { version++; plan.markBase(); requestRender(); });
+    s.onSaveError(() => { saveError = true; });
+    auditBroken = s.auditBroken;
+    presets = await lib.listPresets().catch(() => []);
     session = s;
     sync();
   })();
 
+  const plan = createRenderPlan();
   let raf = 0;
   function requestRender() {
     if (raf) return;
@@ -76,13 +91,17 @@
     for (const c of [base, live]) {
       if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
     }
-    if (!fitted) { fit(); fitted = true; }
+    if (!fitted) { fit(); fitted = true; plan.markBase(); }
     renderer.setViewport({ ...view, dpr });
-    const st = session.history.state;
-    const erasing = ctrl?.erasing ?? new Set<Id>();
-    const strokes = (st.strokes[page.id] ?? []).map((s) => (erasing.has(s.id) ? { ...s, hidden: true } : s));
-    const shapes = (st.shapes[page.id] ?? []).map((s) => (erasing.has(s.id) ? { ...s, hidden: true } : s));
-    renderer.renderPage(page, strokes, shapes);
+    const todo = plan.take();
+    if (todo.base) {
+      const st = session.history.state;
+      const erasing = ctrl?.erasing ?? new Set<Id>();
+      const strokes = (st.strokes[page.id] ?? []).map((s) => (erasing.has(s.id) ? { ...s, hidden: true } : s));
+      const shapes = (st.shapes[page.id] ?? []).map((s) => (erasing.has(s.id) ? { ...s, hidden: true } : s));
+      renderer.renderPage(page, strokes, shapes);
+    }
+    if (!todo.live) return;
     const pts = ctrl?.livePoints();
     if (pts && ctrl) {
       if (ctrl.tool === 'lasso') drawLasso(pts);
@@ -109,35 +128,28 @@
   }
 
   function drawSelection() {
-    if (!ctrl?.selection.length || !session || !page) return;
-    const ids = new Set(ctrl.selection);
-    const st = session.history.state;
-    const pts = (st.strokes[page.id] ?? []).filter((s) => ids.has(s.id) && !s.hidden).flatMap((s) => {
-      const out: number[] = [];
-      for (let i = 0; i < s.points.length; i += 4) out.push(s.points[i], s.points[i + 1]);
-      return out;
-    });
-    if (!pts.length) return;
-    const xs = pts.filter((_, i) => i % 2 === 0), ys = pts.filter((_, i) => i % 2 === 1);
+    const b = ctrl?.selectionBBox();
+    if (!b) return;
     const ctx = live!.getContext('2d')!;
     const dpr = window.devicePixelRatio || 1;
     ctx.setTransform(view.scale * dpr, 0, 0, view.scale * dpr, view.offsetX * dpr, view.offsetY * dpr);
     ctx.setLineDash([4 / view.scale, 4 / view.scale]);
     ctx.strokeStyle = '#3b6ea5';
     ctx.lineWidth = 1 / view.scale;
-    ctx.strokeRect(Math.min(...xs) - 6, Math.min(...ys) - 6, Math.max(...xs) - Math.min(...xs) + 12, Math.max(...ys) - Math.min(...ys) + 12);
+    ctx.strokeRect(b.minX - 6, b.minY - 6, b.maxX - b.minX + 12, b.maxY - b.minY + 12);
     ctx.setLineDash([]);
   }
 
   $effect(() => {
     if (base && live && !renderer) renderer = new PageRenderer(base, live);
     void page; void version;
+    plan.markBase();
     requestRender();
   });
 
   $effect(() => {
     if (!host) return;
-    const ro = new ResizeObserver(() => requestRender());
+    const ro = new ResizeObserver(() => { plan.markBase(); requestRender(); });
     ro.observe(host);
     return () => ro.disconnect();
   });
@@ -153,20 +165,27 @@
     if (!ctrl || !page) return;
     const ink: RouterAction[] = [];
     for (const a of actions) {
-      if (a.kind === 'pan') { view.offsetX += a.dx; view.offsetY += a.dy; }
+      if (a.kind === 'pan') { view.offsetX += a.dx; view.offsetY += a.dy; plan.markBase(); }
       else if (a.kind === 'zoom') {
         const s = Math.min(8, Math.max(0.25, view.scale * a.scale));
         const k = s / view.scale;
         view.offsetX = a.cx - (a.cx - view.offsetX) * k;
         view.offsetY = a.cy - (a.cy - view.offsetY) * k;
         view.scale = s;
+        plan.markBase();
       } else if (a.kind === 'three-finger-tap') setToolbar({ ...tb, fullscreen: !tb.fullscreen });
       else ink.push(toPt(a));
     }
     if (ink.length && !session?.readOnly) {
       await ctrl.onActions(page.id, ink, t);
-      if (ink.some((a) => a.kind === 'stroke-end')) sync();
+      if (ctrl.tool === 'eraser') plan.markBase(); // erase preview lives on the base layer
+      if (ink.some((a) => a.kind === 'stroke-end' || a.kind === 'stroke-cancel')) {
+        version++; // selection, undo state and toolbar depend on the finished stroke
+        plan.markBase();
+        sync();
+      }
     }
+    plan.markLive();
     requestRender();
   }
 
@@ -245,7 +264,7 @@
   }
 
   async function close() { await session?.close(); onClose(); }
-  onDestroy(() => { if (raf) cancelAnimationFrame(raf); void session?.close(); });
+  onDestroy(() => { destroyed = true; if (raf) cancelAnimationFrame(raf); void session?.close(); });
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -254,14 +273,21 @@
   {#if session}
     <Toolbar
       title={session.meta.title} {mode} {tool} {style} {presets} {tb}
-      canUndo={session.history.canUndo && version >= 0} canRedo={session.history.canRedo && version >= 0}
-      readOnly={session.readOnly} hasSelection={(ctrl?.selection.length ?? 0) > 0 && version >= 0}
+      canUndo={version >= 0 && session.history.canUndo} canRedo={version >= 0 && session.history.canRedo}
+      readOnly={session.readOnly} hasSelection={version >= 0 && (ctrl?.selection.length ?? 0) > 0}
       scribble={settings.scribble} autoShapes={settings.autoShapes}
       onBack={close} onMode={setMode} onTool={setTool} onStyle={setStyle} onUndo={undo} onRedo={redo}
       onToolbar={setToolbar} onDeleteSelection={deleteSelection}
       onSavePreset={savePreset} onApplyPreset={applyPreset} onDeletePreset={deletePreset} onSettings={setSettings}
     />
     {#if session.readOnly}<div class="ro" role="status">{READ_ONLY_MESSAGE}</div>{/if}
+    {#if saveError && version >= 0 && session.saveFailed}<div class="ro err" role="alert">บันทึกไม่สำเร็จ กำลังลองใหม่ — อย่าปิดแอป</div>{/if}
+    {#if auditBroken}<div class="ro err" role="alert">ประวัติการแก้ไขของเอกสารนี้ไม่ต่อเนื่อง อาจถูกแก้ไขจากภายนอก</div>{/if}
+  {:else if openError}
+    <div class="screen open-error">
+      <p class="error" role="alert">{openError}</p>
+      <button onclick={onClose}>กลับ</button>
+    </div>
   {/if}
   <div
     class="canvas-host" role="application" aria-label="พื้นที่เขียน" bind:this={host} data-testid="canvas-host"
@@ -281,5 +307,7 @@
   .editor { position: fixed; inset: 0; background: #dfe3ea; overflow: hidden; }
   .canvas-host { position: absolute; inset: 0; touch-action: none; user-select: none; -webkit-user-select: none; }
   .layer { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .open-error { position: relative; z-index: 12; }
+  .err { background: #fde2e1 !important; color: #8c1d18; top: 96px !important; }
   .ro { position: absolute; top: 56px; left: 50%; transform: translateX(-50%); z-index: 11; background: #fff4d6; padding: 6px 12px; border-radius: 8px; }
 </style>

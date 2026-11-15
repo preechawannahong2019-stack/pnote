@@ -8,13 +8,14 @@ export function createAutosave(save: () => Promise<void>, delayMs = AUTOSAVE_MS)
 
   const flush = (): Promise<void> => {
     if (timer) { clearTimeout(timer); timer = null; }
-    if (!pending) return running;
+    if (!pending) return running.catch(() => {});
     pending = false;
-    running = running.then(save, save);
+    running = running.catch(() => {}).then(save);
     return running;
   };
-  const onHide = () => { void flush(); };
-  const onVisibility = () => { if (document.visibilityState === 'hidden') void flush(); };
+  const quiet = () => { flush().catch(() => { /* reported by save() */ }); };
+  const onHide = quiet;
+  const onVisibility = () => { if (document.visibilityState === 'hidden') quiet(); };
   window.addEventListener('pagehide', onHide);
   document.addEventListener('visibilitychange', onVisibility);
 
@@ -22,7 +23,7 @@ export function createAutosave(save: () => Promise<void>, delayMs = AUTOSAVE_MS)
     schedule(): void {
       pending = true;
       if (timer) clearTimeout(timer);
-      timer = setTimeout(() => { void flush(); }, delayMs);
+      timer = setTimeout(quiet, delayMs);
     },
     flush,
     dispose(): void {

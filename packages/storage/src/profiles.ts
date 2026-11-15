@@ -54,8 +54,11 @@ export class ProfileService {
 
   /** Serialize operations per profile so parallel attempts are each counted. */
   private exclusive<T>(id: Id, fn: () => Promise<T>): Promise<T> {
+    // across tabs: Web Locks; within this instance: a promise queue
+    const locks = (globalThis.navigator as (Navigator & { locks?: LockManager }) | undefined)?.locks;
+    const run = locks ? () => locks.request(`pnote-profile-${id}`, fn) as Promise<T> : fn;
     const prev = this.queues.get(id) ?? Promise.resolve();
-    const next = prev.then(fn, fn);
+    const next = prev.then(run, run);
     this.queues.set(id, next.catch(() => undefined));
     return next;
   }
@@ -115,17 +118,18 @@ export class ProfileService {
       if (rec.locked) return { ok: false, reason: 'locked' };
       const t = this.now();
       if (t < rec.nextAllowedAt) return { ok: false, reason: 'delayed', retryAfterMs: rec.nextAllowedAt - t };
+      // count the attempt as failed before the slow key derivation; undone on success
+      const failed = rec.failedAttempts + 1;
+      const locked = failed >= MAX_ATTEMPTS;
+      const nextAllowedAt = failed >= DELAY_FROM_ATTEMPT ? t + BASE_DELAY_MS * 2 ** (failed - DELAY_FROM_ATTEMPT) : 0;
+      await this.write({ ...rec, failedAttempts: failed, nextAllowedAt, locked });
       try {
         const wrapped = await this.device.unwrap(unb64(rec.wrappedBySecret));
         const key = await unwrapDataKey(wrapped, await deriveKek(secret, unb64(rec.salt)));
-        if (rec.failedAttempts || rec.nextAllowedAt) await this.write({ ...rec, failedAttempts: 0, nextAllowedAt: 0 });
-        return { ok: true, profile: summary(rec), key, store: new EncryptedStore(this.adapter, key, id) };
+        await this.write({ ...rec, failedAttempts: 0, nextAllowedAt: 0, locked: false });
+        return { ok: true, profile: summary({ ...rec, locked: false }), key, store: new EncryptedStore(this.adapter, key, id) };
       } catch (e) {
         if (!(e instanceof WrongKeyError)) throw e;
-        const failed = rec.failedAttempts + 1;
-        const locked = failed >= MAX_ATTEMPTS;
-        const nextAllowedAt = failed >= DELAY_FROM_ATTEMPT ? t + BASE_DELAY_MS * 2 ** (failed - DELAY_FROM_ATTEMPT) : 0;
-        await this.write({ ...rec, failedAttempts: failed, nextAllowedAt, locked });
         return locked ? { ok: false, reason: 'locked' } : { ok: false, reason: 'wrong', attemptsLeft: MAX_ATTEMPTS - failed };
       }
     });
@@ -136,14 +140,17 @@ export class ProfileService {
     return this.exclusive(id, async () => {
       const rec = await this.read(id);
       if (!rec) throw new Error(`no profile ${id}`);
+      let exportable: CryptoKey;
       let key: CryptoKey;
       try {
-        key = await unwrapDataKey(unb64(rec.wrappedByRecovery), await deriveKek(normalizeRecoveryCode(recoveryCode), unb64(rec.recoverySalt)));
+        const kek = await deriveKek(normalizeRecoveryCode(recoveryCode), unb64(rec.recoverySalt));
+        exportable = await unwrapDataKey(unb64(rec.wrappedByRecovery), kek, true);
+        key = await unwrapDataKey(unb64(rec.wrappedByRecovery), kek);
       } catch (e) {
         if (e instanceof WrongKeyError) return { ok: false, reason: 'wrong', attemptsLeft: MAX_ATTEMPTS - rec.failedAttempts };
         throw e;
       }
-      const next: ProfileRecord = { ...rec, ...(await this.wrapForSecret(key, newSecret)), failedAttempts: 0, nextAllowedAt: 0, locked: false };
+      const next: ProfileRecord = { ...rec, ...(await this.wrapForSecret(exportable, newSecret)), failedAttempts: 0, nextAllowedAt: 0, locked: false };
       await this.write(next);
       return { ok: true, profile: summary(next), key, store: new EncryptedStore(this.adapter, key, id) };
     });

@@ -29,10 +29,16 @@ export class IndexedDbAdapter implements StorageAdapter {
     const v = await req((await this.store('readonly')).get(path));
     return v ? new Uint8Array(v as ArrayBuffer) : null;
   }
+  /** Resolves only when the transaction has committed, so data survives the page being killed right after. */
   async put(path: string, data: Uint8Array): Promise<void> {
     const copy = data.slice().buffer;
-    const s = await this.store('readwrite');
-    await req(s.put(copy, path));
+    const tx = (await this.db).transaction(STORE, 'readwrite', { durability: 'strict' } as IDBTransactionOptions);
+    tx.objectStore(STORE).put(copy, path);
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error ?? new Error('transaction aborted'));
+    });
   }
   async delete(path: string): Promise<void> {
     await req((await this.store('readwrite')).delete(path));

@@ -62,6 +62,12 @@ export class InputRouter {
   }
 
   private beginStroke(s: PointerSample): RouterAction[] {
+    if (s.pointerType !== 'touch') {
+      // touches already on the screen when a pen/mouse stroke starts are palms
+      for (const id of this.touches.keys()) this.palms.add(id);
+      this.touches.clear();
+      this.tap = null;
+    }
     this.stroke = { pointerId: s.pointerId, input: s.pointerType };
     return [{ kind: 'stroke-begin', pointerId: s.pointerId, input: s.pointerType, x: s.x, y: s.y, p: s.pressure, t: s.t }];
   }
@@ -87,6 +93,7 @@ export class InputRouter {
     // palm rejection: touches while a pen/mouse stroke is active are ignored
     if (this.stroke && this.stroke.input !== 'touch') {
       if (s.type === 'down') this.palms.add(id);
+      else if (s.type === 'up' || s.type === 'cancel') { this.palms.delete(id); this.touches.delete(id); }
       return [];
     }
     if (s.type === 'down') return this.touchDown(s);

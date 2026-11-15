@@ -8,11 +8,19 @@ import { isHolding, recognizeShape } from '@pnote/ink/shapes';
 import { blankPage } from '@pnote/storage/library';
 import type { EditorSession } from './session';
 
+/** Bounding box of the selected objects (no argument spreading, safe for huge strokes). */
+export function selectionBounds(strokes: Stroke[], shapes: Shape[], ids: Id[]): BBox | null {
+  const want = new Set(ids);
+  const boxes = [...strokes.filter((s) => want.has(s.id) && !s.hidden).map(strokeBBox), ...shapes.filter((s) => want.has(s.id) && !s.hidden).map(shapeBBox)];
+  if (!boxes.length) return null;
+  return boxes.reduce((a, b) => ({ minX: Math.min(a.minX, b.minX), minY: Math.min(a.minY, b.minY), maxX: Math.max(a.maxX, b.maxX), maxY: Math.max(a.maxY, b.maxY) }));
+}
+
 export type ActiveTool = 'pen' | 'highlighter' | 'eraser' | 'lasso';
 export const ERASER_RADIUS_PT = 6;
 const SELECTION_PAD_PT = 10;
 
-interface Live { pageId: Id; input: InputKind; points: number[]; held: boolean; dragFrom?: [number, number]; erased?: Set<Id> }
+interface Live { pageId: Id; input: InputKind; points: number[]; dragFrom?: [number, number]; erased?: Set<Id> }
 
 export class EditorController {
   mode: InputMode = 'pen';
@@ -47,16 +55,10 @@ export class EditorController {
     return { strokes: (s.strokes[pageId] ?? []).filter((x) => !x.hidden), shapes: (s.shapes[pageId] ?? []).filter((x) => !x.hidden) };
   }
 
-  private selectionBBox(): BBox | null {
+  selectionBBox(): BBox | null {
     if (!this.selection.length || !this.selectionPage) return null;
     const { strokes, shapes } = this.visible(this.selectionPage);
-    const ids = new Set(this.selection);
-    const boxes = [...strokes.filter((s) => ids.has(s.id)).map(strokeBBox), ...shapes.filter((s) => ids.has(s.id)).map(shapeBBox)];
-    if (!boxes.length) return null;
-    return {
-      minX: Math.min(...boxes.map((b) => b.minX)), minY: Math.min(...boxes.map((b) => b.minY)),
-      maxX: Math.max(...boxes.map((b) => b.maxX)), maxY: Math.max(...boxes.map((b) => b.maxY)),
-    };
+    return selectionBounds(strokes, shapes, this.selection);
   }
 
   private erase(pageId: Id, x: number, y: number): void {
@@ -76,7 +78,7 @@ export class EditorController {
   }
 
   private begin(pageId: Id, a: Extract<RouterAction, { kind: 'stroke-begin' }>): void {
-    this.live = { pageId, input: a.input, points: [a.x, a.y, a.p, a.t], held: false };
+    this.live = { pageId, input: a.input, points: [a.x, a.y, a.p, a.t] };
     if (this.tool === 'eraser') {
       this.live.erased = new Set();
       this.erase(pageId, a.x, a.y);
@@ -97,7 +99,6 @@ export class EditorController {
       const steps = Math.max(1, Math.ceil(Math.hypot(a.x - px, a.y - py) / ERASER_RADIUS_PT));
       for (let i = 1; i <= steps; i++) this.erase(live.pageId, px + ((a.x - px) * i) / steps, py + ((a.y - py) * i) / steps);
     }
-    if (this.tool === 'pen' && this.opts.autoShapes && !live.held) live.held = isHolding(new Float32Array(live.points), a.t);
   }
 
   private async end(nowT: number): Promise<void> {
@@ -141,7 +142,8 @@ export class EditorController {
     };
     await this.session.run({ type: 'addStroke', stroke });
 
-    const held = live.held || isHolding(pts, nowT);
+    // decide only at the end: a pause earlier in the stroke is just hesitation
+    const held = isHolding(pts, nowT);
     if (this.tool === 'pen' && this.opts.autoShapes && held) {
       const geometry = recognizeShape(pts);
       if (geometry) {

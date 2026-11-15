@@ -16,11 +16,14 @@ export class EncryptedStore {
   }
 
   async getBytes(rel: string): Promise<Uint8Array | null> {
-    const raw = await this.adapter.get(this.path(rel));
-    return raw ? decryptBytes(this.key, raw) : null;
+    const path = this.path(rel);
+    const raw = await this.adapter.get(path);
+    return raw ? decryptBytes(this.key, raw, new TextEncoder().encode(path)) : null;
   }
+  /** The path is part of the AAD, so a file copied over another path fails to decrypt. */
   async putBytes(rel: string, b: Uint8Array): Promise<void> {
-    await this.adapter.put(this.path(rel), await encryptBytes(this.key, b));
+    const path = this.path(rel);
+    await this.adapter.put(path, await encryptBytes(this.key, b, new TextEncoder().encode(path)));
   }
   async getJSON<T>(rel: string): Promise<T | null> {
     const b = await this.getBytes(rel);
