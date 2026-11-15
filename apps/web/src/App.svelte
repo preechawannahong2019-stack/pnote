@@ -46,11 +46,11 @@
     <ProfilePicker {service} onPick={(p) => { selected = p; view = 'unlock'; }} onCreate={() => (view = 'create')} />
   {/key}
 {:else if view === 'create'}
-  <CreateProfile {service} onDone={(p) => { selected = p; view = 'unlock'; }} onCancel={() => { pickerKey++; view = 'picker'; }} />
+  <CreateProfile {service} pin={device.available} onDone={(p) => { selected = p; view = 'unlock'; }} onCancel={() => { pickerKey++; view = 'picker'; }} />
 {:else if view === 'unlock' && selected}
-  <Unlock {service} profile={selected} onUnlocked={unlocked} onRecover={() => (view = 'recover')} onBack={() => { pickerKey++; view = 'picker'; }} />
+  <Unlock {service} profile={selected} pin={device.available} onUnlocked={unlocked} onRecover={() => (view = 'recover')} onBack={() => { pickerKey++; view = 'picker'; }} />
 {:else if view === 'recover' && selected}
-  <Recover {service} profile={selected} onUnlocked={unlocked} onBack={() => (view = 'unlock')} />
+  <Recover {service} profile={selected} pin={device.available} onUnlocked={unlocked} onBack={() => (view = 'unlock')} />
 {:else if view === 'library' && session}
   <Library store={session.store} author={{ profileId: session.profile.id, name: session.profile.name }} onLock={lock} />
 {/if}
