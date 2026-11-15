@@ -110,16 +110,17 @@ export class Library {
 
   async openDocument(id: Id): Promise<{ meta: DocumentMeta; state: DocState; audit: AuditEntry[]; auditOk: boolean }> {
     const meta = await this.getMeta(id);
-    const state: DocState = { pages: meta.pages, strokes: {}, shapes: {} };
-    for (const p of meta.pages) { state.strokes[p.id] = []; state.shapes[p.id] = []; }
+    const state: DocState = { pages: meta.pages, strokes: {}, shapes: {}, textBoxes: {} };
+    for (const p of meta.pages) { state.strokes[p.id] = []; state.shapes[p.id] = []; state.textBoxes[p.id] = []; }
     // load every page file, including pages removed from the document (data is never dropped)
     for (const path of await this.store.list(`${docDir(id)}/pages/`)) {
       const pageId = path.slice(path.lastIndexOf('/') + 1, -'.bin'.length);
       const bin = await this.store.getBytes(path);
       if (!bin) continue;
-      const { strokes, shapes } = decodePage(bin);
+      const { strokes, shapes, textBoxes } = decodePage(bin);
       state.strokes[pageId] = strokes;
       state.shapes[pageId] = shapes;
+      state.textBoxes[pageId] = textBoxes;
     }
     const audit = (await this.store.getJSON<AuditEntry[]>(`${docDir(id)}/audit.json`)) ?? [];
     const auditOk = (await verifyAudit(audit)).ok;
@@ -128,7 +129,7 @@ export class Library {
 
   async saveDocument(meta: DocumentMeta, state: DocState, audit: AuditEntry[], dirtyPageIds: Id[]): Promise<void> {
     for (const pid of dirtyPageIds) {
-      await this.store.putBytes(pagePath(meta.id, pid), encodePage(state.strokes[pid] ?? [], state.shapes[pid] ?? []));
+      await this.store.putBytes(pagePath(meta.id, pid), encodePage(state.strokes[pid] ?? [], state.shapes[pid] ?? [], state.textBoxes?.[pid] ?? []));
     }
     await this.store.putJSON(`${docDir(meta.id)}/audit.json`, audit);
     // re-read so a rename/move made elsewhere is not reverted; this save only owns pages

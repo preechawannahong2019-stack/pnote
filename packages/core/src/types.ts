@@ -52,7 +52,29 @@ export type PageSource =
   | { type: 'pdf'; pageNo: number }
   | { type: 'image'; blobId: Id };
 
-export interface PageRef { id: Id; source: PageSource; widthPt: number; heightPt: number }
+/** Crop box in PDF user space plus the page's /Rotate. */
+export interface PdfPageBox { x: number; y: number; w: number; h: number; rotate: 0 | 90 | 180 | 270 }
+
+/** widthPt/heightPt are the page as displayed (after rotation). */
+export interface PageRef { id: Id; source: PageSource; widthPt: number; heightPt: number; pdfBox?: PdfPageBox }
+
+export interface TextBox {
+  id: Id;
+  pageId: Id;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  text: string;
+  font: 'sarabun';
+  sizePt: number;
+  color: string;
+  bold: boolean;
+  author: Author;
+  hidden?: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
 
 export type DocKind = 'notebook' | 'pdf' | 'image' | 'web';
 
@@ -66,6 +88,8 @@ export interface DocumentMeta {
   sourceSha256?: string;
   sourceUrl?: string;
   capturedAt?: number;
+  originalName?: string;
+  importedAt?: number;
   pages: PageRef[];
   createdAt: number;
   updatedAt: number;

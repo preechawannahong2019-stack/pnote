@@ -14,5 +14,5 @@ export function rectShape(id: string, sourceStrokeId: string, pageId = 'pg1'): S
 }
 export function emptyState(...pageIds: string[]): DocState {
   const ids = pageIds.length ? pageIds : ['pg1'];
-  return { pages: ids.map(page), strokes: Object.fromEntries(ids.map((i) => [i, []])), shapes: Object.fromEntries(ids.map((i) => [i, []])) };
+  return { pages: ids.map(page), strokes: Object.fromEntries(ids.map((i) => [i, []])), shapes: Object.fromEntries(ids.map((i) => [i, []])), textBoxes: Object.fromEntries(ids.map((i) => [i, []])) };
 }
