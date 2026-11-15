@@ -13,3 +13,6 @@ project(':capacitor-privacy-screen').projectDir = new File('../../../node_module
 
 include ':capacitor-share'
 project(':capacitor-share').projectDir = new File('../../../node_modules/@capacitor/share/android')
+
+include ':pnote-capacitor-pnote'
+project(':pnote-capacitor-pnote').projectDir = new File('../../../packages/capacitor-pnote/android')

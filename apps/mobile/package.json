@@ -15,7 +15,8 @@
     "@capacitor/filesystem": "^8.1.5",
     "@capacitor/ios": "^8.6.2",
     "@capacitor/privacy-screen": "^2.0.1",
-    "@capacitor/share": "^8.0.3"
+    "@capacitor/share": "^8.0.3",
+    "@pnote/capacitor-pnote": "*"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.6.2"

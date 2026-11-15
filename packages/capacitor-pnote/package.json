@@ -1,0 +1,31 @@
+{
+  "name": "@pnote/capacitor-pnote",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "PNote native plugins: PnoteSecure (hardware keys), PnoteCapture (web capture), PnoteIncoming (open-in)",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    },
+    "android": {
+      "src": "android"
+    }
+  },
+  "files": [
+    "android/src/main/",
+    "android/build.gradle",
+    "ios/Sources",
+    "ios/Tests",
+    "Package.swift",
+    "src"
+  ],
+  "peerDependencies": {
+    "@capacitor/core": ">=8.0.0"
+  }
+}

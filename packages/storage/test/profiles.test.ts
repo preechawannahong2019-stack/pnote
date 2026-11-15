@@ -165,3 +165,35 @@ describe('review fixes: keys and cross-tab attempts', () => {
   });
 
 });
+
+describe('stage 3: device key missing', () => {
+  function flakyDevice() {
+    let key = 7;
+    const d = {
+      available: true,
+      lost: false,
+      wrap: async (b: Uint8Array) => b.map((x) => x ^ key),
+      unwrap: async (b: Uint8Array) => {
+        if (d.lost) { const { DeviceKeyMissing } = await import('../src/device-key'); throw new DeviceKeyMissing(); }
+        return b.map((x) => x ^ key);
+      },
+      reset() { key = 99; d.lost = false; },
+    };
+    return d;
+  }
+
+  it('reports device-key-missing without counting an attempt, and recovery re-wraps with the new device key', async () => {
+    const adapter = new MemoryAdapter();
+    const device = flakyDevice();
+    const svc = new ProfileService(adapter, device);
+    const { profile, recoveryCode } = await svc.create('A', '123456', '#000');
+    device.lost = true; // e.g. app reinstalled: the hardware key is gone
+    expect(await svc.unlock(profile.id, '123456')).toEqual({ ok: false, reason: 'device-key-missing' });
+    expect(await svc.unlock(profile.id, '123456')).toEqual({ ok: false, reason: 'device-key-missing' });
+    device.reset(); // a new hardware key is created on first wrap
+    const r = await svc.recover(profile.id, recoveryCode, '654321');
+    expect(r.ok).toBe(true);
+    expect((await svc.unlock(profile.id, '654321')).ok).toBe(true);
+    expect(await svc.unlock(profile.id, '111111')).toMatchObject({ reason: 'wrong', attemptsLeft: 9 });
+  });
+});

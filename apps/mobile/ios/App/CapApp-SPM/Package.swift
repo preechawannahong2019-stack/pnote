@@ -15,7 +15,8 @@ let package = Package(
         .package(name: "CapacitorApp", path: "../../../../../node_modules/@capacitor/app"),
         .package(name: "CapacitorFilesystem", path: "../../../../../node_modules/@capacitor/filesystem"),
         .package(name: "CapacitorPrivacyScreen", path: "../../../../../node_modules/@capacitor/privacy-screen"),
-        .package(name: "CapacitorShare", path: "../../../../../node_modules/@capacitor/share")
+        .package(name: "CapacitorShare", path: "../../../../../node_modules/@capacitor/share"),
+        .package(name: "PnoteCapacitorPnote", path: "../../../../../packages/capacitor-pnote")
     ],
     targets: [
         .target(
@@ -26,7 +27,8 @@ let package = Package(
                 .product(name: "CapacitorApp", package: "CapacitorApp"),
                 .product(name: "CapacitorFilesystem", package: "CapacitorFilesystem"),
                 .product(name: "CapacitorPrivacyScreen", package: "CapacitorPrivacyScreen"),
-                .product(name: "CapacitorShare", package: "CapacitorShare")
+                .product(name: "CapacitorShare", package: "CapacitorShare"),
+                .product(name: "PnoteCapacitorPnote", package: "PnoteCapacitorPnote")
             ]
         )
     ]

@@ -16,7 +16,8 @@
     "@fontsource/sarabun": "^5.3.0",
     "@pnote/core": "*",
     "@pnote/ink": "*",
-    "@pnote/storage": "*"
+    "@pnote/storage": "*",
+    "@pnote/capacitor-pnote": "*"
   },
   "devDependencies": {
     "@playwright/test": "^1.65.1",

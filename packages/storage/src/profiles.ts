@@ -4,7 +4,7 @@ import type { StorageAdapter } from './adapter';
 import {
   deriveKek, generateDataKey, generateRecoveryCode, normalizeRecoveryCode, randomBytes, unwrapDataKey, wrapDataKey, WrongKeyError,
 } from './crypto';
-import type { DeviceKeyProvider } from './device-key';
+import { DeviceKeyMissing, type DeviceKeyProvider } from './device-key';
 import { EncryptedStore } from './encrypted-store';
 
 export interface ProfileSummary { id: Id; name: string; avatarColor: string; locked: boolean; createdAt: number }
@@ -13,7 +13,8 @@ export type UnlockResult =
   | { ok: true; profile: ProfileSummary; store: EncryptedStore; key: CryptoKey }
   | { ok: false; reason: 'wrong'; attemptsLeft: number }
   | { ok: false; reason: 'delayed'; retryAfterMs: number }
-  | { ok: false; reason: 'locked' };
+  | { ok: false; reason: 'locked' }
+  | { ok: false; reason: 'device-key-missing' };
 
 export class WeakSecretError extends Error {
   constructor(min: number) { super(`secret must be at least ${min} characters`); this.name = 'WeakSecretError'; }
@@ -118,13 +119,20 @@ export class ProfileService {
       if (rec.locked) return { ok: false, reason: 'locked' };
       const t = this.now();
       if (t < rec.nextAllowedAt) return { ok: false, reason: 'delayed', retryAfterMs: rec.nextAllowedAt - t };
+      // the hardware key comes first: if it is gone, no PIN can help, so no attempt is counted
+      let wrapped: Uint8Array;
+      try {
+        wrapped = await this.device.unwrap(unb64(rec.wrappedBySecret));
+      } catch (e) {
+        if (e instanceof DeviceKeyMissing) return { ok: false, reason: 'device-key-missing' };
+        throw e;
+      }
       // count the attempt as failed before the slow key derivation; undone on success
       const failed = rec.failedAttempts + 1;
       const locked = failed >= MAX_ATTEMPTS;
       const nextAllowedAt = failed >= DELAY_FROM_ATTEMPT ? t + BASE_DELAY_MS * 2 ** (failed - DELAY_FROM_ATTEMPT) : 0;
       await this.write({ ...rec, failedAttempts: failed, nextAllowedAt, locked });
       try {
-        const wrapped = await this.device.unwrap(unb64(rec.wrappedBySecret));
         const key = await unwrapDataKey(wrapped, await deriveKek(secret, unb64(rec.salt)));
         await this.write({ ...rec, failedAttempts: 0, nextAllowedAt: 0, locked: false });
         return { ok: true, profile: summary({ ...rec, locked: false }), key, store: new EncryptedStore(this.adapter, key, id) };
