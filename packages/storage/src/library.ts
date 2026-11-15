@@ -56,6 +56,31 @@ export class Library {
     return meta;
   }
 
+  get profileId(): Id { return this.store.profileId; }
+
+  /** Write the audit then the meta (last) of an imported document. */
+  async commitImport(meta: DocumentMeta, audit: AuditEntry[]): Promise<void> {
+    await this.store.putJSON(`${docDir(meta.id)}/audit.json`, audit);
+    await this.locked(() => this.putMeta(meta));
+  }
+
+  async removeDocumentFiles(id: Id): Promise<void> {
+    for (const p of await this.store.list(`${docDir(id)}/`)) await this.store.delete(p);
+  }
+
+  /** Remove document folders without meta.json (imports interrupted before completion). */
+  async cleanupOrphans(): Promise<number> {
+    const ids = new Set<string>();
+    for (const p of await this.store.list('documents/')) ids.add(p.split('/')[1]);
+    let removed = 0;
+    for (const id of ids) {
+      if (await this.store.getJSON(`${docDir(id)}/meta.json`)) continue;
+      await this.removeDocumentFiles(id);
+      removed++;
+    }
+    return removed;
+  }
+
   listFolders(): Promise<Folder[]> { return this.folders(); }
 
   createFolder(name: string, parentId: Id | null): Promise<Folder> {
