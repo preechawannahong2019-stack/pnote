@@ -1,6 +1,8 @@
 import 'fake-indexeddb/auto';
 import { MemoryAdapter, type StorageAdapter } from '../src/adapter';
 import { IndexedDbAdapter } from '../src/idb-adapter';
+import { FilesystemAdapter } from '../src/fs-adapter';
+import { memoryFs } from './helpers/mini-fs';
 
 const enc = (s: string) => new TextEncoder().encode(s);
 let n = 0;
@@ -8,6 +10,7 @@ let n = 0;
 describe.each<[string, () => StorageAdapter]>([
   ['MemoryAdapter', () => new MemoryAdapter()],
   ['IndexedDbAdapter', () => new IndexedDbAdapter(`test-${n++}`)],
+  ['FilesystemAdapter', () => new FilesystemAdapter(memoryFs())],
 ])('%s', (_name, make) => {
   it('puts, gets and deletes', async () => {
     const a = make();
