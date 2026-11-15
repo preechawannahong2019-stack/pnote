@@ -8,6 +8,7 @@
   import SearchResults from '../components/SearchResults.svelte';
   import ImportButton from '../components/ImportButton.svelte';
   import CaptureDialog from '../components/CaptureDialog.svelte';
+  import IncomingPrompt from '../components/IncomingPrompt.svelte';
   import { currentServices } from '../platform';
   import type { CaptureResult } from '../platform/capture';
   import { importFile, makeImporter } from '../lib/import-export';
@@ -128,6 +129,7 @@
   }
 </script>
 
+<IncomingPrompt incoming={currentServices().incoming} profileName={author.name} onImport={(f) => importFiles([f])} />
 {#if capturing}
   <CaptureDialog capture={currentServices().capture} onCaptured={saveCapture} onCancel={() => (capturing = false)} />
 {/if}

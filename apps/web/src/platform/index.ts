@@ -3,6 +3,7 @@ import { WebNoDeviceKey, type DeviceKeyProvider } from '@pnote/storage/device-ke
 import { IndexedDbAdapter } from '@pnote/storage/idb-adapter';
 import { setLifecycle, webLifecycle, type Lifecycle } from './lifecycle';
 import { webCaptureFallback, type WebCapture } from './capture';
+import { IncomingFiles, noIncoming } from './incoming';
 
 export type PlatformKind = 'web' | 'android' | 'ios';
 
@@ -21,15 +22,17 @@ export interface PlatformServices {
   device: DeviceKeyProvider;
   lifecycle: Lifecycle;
   capture: WebCapture;
+  incoming: IncomingFiles;
 }
 
 let services: PlatformServices | null = null;
 /** The services created at start-up (web defaults before that, e.g. in tests). */
-export function currentServices(): Pick<PlatformServices, 'capture'> { return services ?? { capture: webCaptureFallback }; }
+const fallbackIncoming = new IncomingFiles(noIncoming);
+export function currentServices(): Pick<PlatformServices, 'capture' | 'incoming'> { return services ?? { capture: webCaptureFallback, incoming: fallbackIncoming }; }
 
 export async function createPlatformServices(kind: PlatformKind = platformKind()): Promise<PlatformServices> {
   const s: PlatformServices = kind === 'web'
-    ? { kind, adapter: new IndexedDbAdapter('pnote'), device: WebNoDeviceKey, lifecycle: webLifecycle(), capture: webCaptureFallback }
+    ? { kind, adapter: new IndexedDbAdapter('pnote'), device: WebNoDeviceKey, lifecycle: webLifecycle(), capture: webCaptureFallback, incoming: fallbackIncoming }
     : await (await import('./native')).createNativeServices(kind);
   setLifecycle(s.lifecycle);
   services = s;

@@ -21,3 +21,12 @@ export interface PnoteCapturePlugin {
 }
 
 export const PnoteCapture = registerPlugin<PnoteCapturePlugin>('PnoteCapture');
+
+import type { PluginListenerHandle } from '@capacitor/core';
+
+export interface PnoteIncomingPlugin {
+  /** A file shared to / opened with PNote, copied into the app cache (path relative to Directory.Cache). Retained until a listener is added. */
+  addListener(event: 'file', cb: (f: { name: string; mime: string; path: string }) => void): Promise<PluginListenerHandle>;
+}
+
+export const PnoteIncoming = registerPlugin<PnoteIncomingPlugin>('PnoteIncoming');

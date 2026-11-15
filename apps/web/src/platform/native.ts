@@ -1,6 +1,7 @@
 import { App as CapApp } from '@capacitor/app';
 import { Directory, Filesystem } from '@capacitor/filesystem';
-import { PnoteCapture, PnoteSecure } from '@pnote/capacitor-pnote';
+import { PnoteCapture, PnoteIncoming, PnoteSecure } from '@pnote/capacitor-pnote';
+import { IncomingFiles } from './incoming';
 import { nativeCapture } from './capture';
 import { nativeLifecycle } from './lifecycle';
 import { FilesystemAdapter } from '@pnote/storage/fs-adapter';
@@ -21,5 +22,10 @@ export async function createNativeServices(kind: Exclude<PlatformKind, 'web'>): 
   return {
     kind, adapter, device: await NativeDeviceKey.create(PnoteSecure), lifecycle: nativeLifecycle(CapApp),
     capture: nativeCapture(PnoteCapture, cacheFiles),
+    incoming: new IncomingFiles({
+      onFile: (cb) => { const h = PnoteIncoming.addListener('file', cb); return () => { void h.then((x) => x.remove()); }; },
+      read: async (path) => new Blob([(await cacheFiles.read(path)) as Uint8Array<ArrayBuffer>]),
+      remove: cacheFiles.remove,
+    }),
   };
 }
