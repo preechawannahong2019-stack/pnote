@@ -27,7 +27,7 @@ export class EditorSession {
 
   private constructor(
     private lib: Library,
-    private author: Author,
+    readonly author: Author,
     public meta: DocumentMeta,
     state: ConstructorParameters<typeof History>[0],
     audit: AuditEntry[],

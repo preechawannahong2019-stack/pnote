@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [svelte(), svelteTesting()],
   test: {
     name: 'web',
-    root: __dirname,
+    root: new URL('.', import.meta.url).pathname,
     environment: 'jsdom',
     globals: true,
     include: ['test/**/*.test.ts'],
