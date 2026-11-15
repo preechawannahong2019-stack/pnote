@@ -2,6 +2,8 @@ import { App as CapApp } from '@capacitor/app';
 import { Directory, Filesystem } from '@capacitor/filesystem';
 import { PnoteCapture, PnoteIncoming, PnoteSecure } from '@pnote/capacitor-pnote';
 import { IncomingFiles } from './incoming';
+import { Share } from '@capacitor/share';
+import { nativeExporter } from './exporter';
 import { nativeCapture } from './capture';
 import { nativeLifecycle } from './lifecycle';
 import { FilesystemAdapter } from '@pnote/storage/fs-adapter';
@@ -26,6 +28,19 @@ export async function createNativeServices(kind: Exclude<PlatformKind, 'web'>): 
       onFile: (cb) => { const h = PnoteIncoming.addListener('file', cb); return () => { void h.then((x) => x.remove()); }; },
       read: async (path) => new Blob([(await cacheFiles.read(path)) as Uint8Array<ArrayBuffer>]),
       remove: cacheFiles.remove,
+    }),
+    exporter: nativeExporter({
+      async writeCache(name, bytes) {
+        let b64 = '';
+        for (let i = 0; i < bytes.length; i += 0x8000) b64 += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        const path = `export/${Date.now()}/${name}`;
+        await Filesystem.writeFile({ path, data: btoa(b64), directory: Directory.Cache, recursive: true });
+        return (await Filesystem.getUri({ path, directory: Directory.Cache })).uri;
+      },
+      remove: async (uri) => { await Filesystem.deleteFile({ path: uri }); },
+      share: async ({ files, title }) => { await Share.share({ files, title, dialogTitle: title }); },
+      // the system share sheet also offers "Save to Files" / Drive / Downloads
+      saveToFiles: async (uri) => { await Share.share({ files: [uri], dialogTitle: 'บันทึกไฟล์' }); },
     }),
   };
 }

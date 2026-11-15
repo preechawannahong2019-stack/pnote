@@ -11,6 +11,7 @@
   import TextBoxEditor from '../components/TextBoxEditor.svelte';
   import { PageSources, backgroundFor } from '../lib/page-sources';
   import { bindSession, getLifecycle } from '../platform/lifecycle';
+  import { currentServices } from '../platform';
   import { OcrQueue } from '@pnote/pdf/ocr-queue';
   import { createTesseractEngine } from '@pnote/pdf/ocr';
   import { searchPage } from '@pnote/pdf/search';
@@ -55,7 +56,8 @@
         : '';
     } catch { /* the warning is best-effort */ }
   }
-  const canShare = typeof navigator !== 'undefined' && !!navigator.canShare?.({ files: [new File([], 'x.pdf', { type: 'application/pdf' })] });
+  const exporter = currentServices().exporter;
+  const canShare = exporter.canShare;
 
   async function doExport(o: { includeTextLayer: boolean }, share: boolean) {
     if (!session || !blobs) return;
@@ -63,14 +65,8 @@
     try {
       await session.flushNow();
       const { bytes, name } = await buildExport(lib, blobs, session.meta.id, author, { includeTextLayer: o.includeTextLayer, includeCertificate: true });
-      const file = new File([bytes as Uint8Array<ArrayBuffer>], name, { type: 'application/pdf' });
-      if (share) await navigator.share({ files: [file], title: session.meta.title });
-      else {
-        const url = URL.createObjectURL(file);
-        const a = Object.assign(document.createElement('a'), { href: url, download: name });
-        document.body.append(a); a.click(); a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 10_000);
-      }
+      if (share) await exporter.share(name, bytes);
+      else await exporter.save(name, bytes);
       exporting = null;
     } catch (e) {
       if ((e as Error)?.name === 'AbortError') { exporting = null; return; }
