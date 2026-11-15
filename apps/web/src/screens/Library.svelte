@@ -2,11 +2,14 @@
   import type { Author, DocumentMeta, Folder, Id, PageTemplate } from '@pnote/core/types';
   import type { EncryptedStore } from '@pnote/storage/encrypted-store';
   import { FolderNotEmptyError, Library } from '@pnote/storage/library';
+  import { BlobStore } from '@pnote/storage/blob-store';
   import Editor from './Editor.svelte';
   import Thumbnail from '../components/Thumbnail.svelte';
 
   let { store, author, onLock }: { store: EncryptedStore; author: Author; onLock: () => void } = $props();
   const lib = new Library(store, author);
+  const blobs = new BlobStore(store);
+  lib.cleanupOrphans().catch(() => {});
 
   let folders = $state<Folder[]>([]);
   let docs = $state<DocumentMeta[]>([]);
@@ -65,7 +68,7 @@
 </script>
 
 {#if openDoc}
-  <Editor {lib} {author} docId={openDoc} onClose={() => (openDoc = null)} />
+  <Editor {lib} {blobs} {author} docId={openDoc} onClose={() => (openDoc = null)} />
 {:else}
   <div class="library">
     <header>

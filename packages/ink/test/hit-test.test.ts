@@ -53,3 +53,15 @@ describe('shapesNearPoint', () => {
     expect(shapesNearPoint(50, 50, 3, [r])).toEqual([]);
   });
 });
+
+describe('text boxes in hit testing', () => {
+  const tb = (id: string, x: number, y: number, extra = {}) => ({ id, pageId: 'pg', x, y, w: 50, h: 20, text: 'ก', font: 'sarabun' as const, sizePt: 12, color: '#000', bold: false, author: { profileId: 'p', name: 'A' }, createdAt: 1, updatedAt: 1, ...extra });
+  it('textBoxesAt hits inside the box only, skipping hidden', async () => {
+    const { textBoxesAt } = await import('../src/hit-test');
+    expect(textBoxesAt(20, 15, [tb('a', 10, 10), tb('b', 10, 10, { hidden: true })])).toEqual(['a']);
+    expect(textBoxesAt(70, 15, [tb('a', 10, 10)])).toEqual([]);
+  });
+  it('lasso selects a text box by its centre', () => {
+    expect(objectsInLasso([[0, 0], [100, 0], [100, 100], [0, 100]], [], [], [tb('a', 10, 10), tb('b', 200, 10)])).toEqual(['a']);
+  });
+});

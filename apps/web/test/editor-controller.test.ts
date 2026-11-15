@@ -193,3 +193,51 @@ describe('review fixes: selection bounds and render plan', () => {
     expect(plan.take()).toEqual({ base: true, live: true });
   });
 });
+
+describe('text tool', () => {
+  const tap = (x: number, y: number): RouterAction[] => { t += 8; return [{ kind: 'stroke-begin', pointerId: 1, input: 'pen', x, y, p: 0.5, t }, { kind: 'stroke-end', pointerId: 1 }]; };
+  const value = (text: string) => ({ text, sizePt: 16, color: '#000', bold: false, x: 50, y: 60, w: 200 });
+
+  it('a tap on empty paper requests a new text box at that point', async () => {
+    const { ctrl, pageId } = await setup();
+    const reqs: unknown[] = [];
+    ctrl.onTextRequest = (r) => reqs.push(r);
+    ctrl.tool = 'text';
+    await ctrl.onActions(pageId, tap(50, 60), t);
+    expect(reqs).toEqual([{ pageId, x: 50, y: 60 }]);
+  });
+
+  it('commit adds, a tap on it edits, empty text hides', async () => {
+    const { ctrl, pageId, state } = await setup();
+    const reqs: { existing?: { id: string } }[] = [];
+    ctrl.onTextRequest = (r) => reqs.push(r);
+    ctrl.tool = 'text';
+    await ctrl.commitText(pageId, undefined, value('บันทึก'));
+    const box = state().textBoxes[pageId][0];
+    expect(box).toMatchObject({ text: 'บันทึก', x: 50, y: 60, author });
+    await ctrl.onActions(pageId, tap(60, 65), t);
+    expect(reqs[0].existing?.id).toBe(box.id);
+    await ctrl.commitText(pageId, box, value('แก้แล้ว'));
+    expect(state().textBoxes[pageId][0].text).toBe('แก้แล้ว');
+    await ctrl.commitText(pageId, state().textBoxes[pageId][0], value('   '));
+    expect(state().textBoxes[pageId][0].hidden).toBe(true);
+  });
+
+  it('a new empty text box adds nothing', async () => {
+    const { ctrl, pageId, state } = await setup();
+    await ctrl.commitText(pageId, undefined, value(''));
+    expect(state().textBoxes[pageId]).toEqual([]);
+  });
+
+  it('lasso drags text boxes; the eraser leaves them alone', async () => {
+    const { ctrl, pageId, state } = await setup();
+    await ctrl.commitText(pageId, undefined, value('ก'));
+    ctrl.tool = 'eraser';
+    await ctrl.onActions(pageId, gesture([[40, 60], [60, 70], [80, 70]]), t);
+    expect(state().textBoxes[pageId][0].hidden).toBeFalsy();
+    ctrl.tool = 'lasso';
+    await ctrl.onActions(pageId, gesture([[0, 0], [400, 0], [400, 200], [0, 200], [0, 0]]), t);
+    await ctrl.onActions(pageId, gesture([[100, 70], [110, 80]]), t);
+    expect(state().textBoxes[pageId][0]).toMatchObject({ x: 60, y: 70 });
+  });
+});

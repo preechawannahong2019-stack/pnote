@@ -1,6 +1,6 @@
 import { newId } from '@pnote/core/ids';
-import type { Id, InputKind, PageTemplate, PenPreset, PenStyle, Shape, Stroke } from '@pnote/core/types';
-import { objectsInLasso, shapeBBox, shapesNearPoint, strokeBBox, strokesNearPoint, type BBox } from '@pnote/ink/hit-test';
+import type { Id, InputKind, PageTemplate, PenPreset, PenStyle, Shape, Stroke, TextBox } from '@pnote/core/types';
+import { objectsInLasso, shapeBBox, shapesNearPoint, strokeBBox, strokesNearPoint, textBoxBBox, textBoxesAt, type BBox } from '@pnote/ink/hit-test';
 import type { InputMode, RouterAction } from '@pnote/ink/input-router';
 import { DEFAULT_HIGHLIGHTER, DEFAULT_PEN, clampStyle } from '@pnote/ink/outline';
 import { isScribble, scribbleTargets } from '@pnote/ink/scribble';
@@ -9,14 +9,23 @@ import { blankPage } from '@pnote/storage/library';
 import type { EditorSession } from './session';
 
 /** Bounding box of the selected objects (no argument spreading, safe for huge strokes). */
-export function selectionBounds(strokes: Stroke[], shapes: Shape[], ids: Id[]): BBox | null {
+export function selectionBounds(strokes: Stroke[], shapes: Shape[], ids: Id[], textBoxes: TextBox[] = []): BBox | null {
   const want = new Set(ids);
-  const boxes = [...strokes.filter((s) => want.has(s.id) && !s.hidden).map(strokeBBox), ...shapes.filter((s) => want.has(s.id) && !s.hidden).map(shapeBBox)];
+  const boxes = [
+    ...strokes.filter((s) => want.has(s.id) && !s.hidden).map(strokeBBox),
+    ...shapes.filter((s) => want.has(s.id) && !s.hidden).map(shapeBBox),
+    ...textBoxes.filter((t) => want.has(t.id) && !t.hidden).map(textBoxBBox),
+  ];
   if (!boxes.length) return null;
   return boxes.reduce((a, b) => ({ minX: Math.min(a.minX, b.minX), minY: Math.min(a.minY, b.minY), maxX: Math.max(a.maxX, b.maxX), maxY: Math.max(a.maxY, b.maxY) }));
 }
 
-export type ActiveTool = 'pen' | 'highlighter' | 'eraser' | 'lasso';
+export type ActiveTool = 'pen' | 'highlighter' | 'eraser' | 'lasso' | 'text';
+export interface TextRequest { pageId: Id; x: number; y: number; existing?: TextBox }
+export interface TextValue { text: string; sizePt: number; color: string; bold: boolean; x: number; y: number; w: number }
+export const DEFAULT_TEXT_WIDTH = 200;
+export const DEFAULT_TEXT_SIZE = 16;
+const TAP_MAX_MOVE_PT = 4;
 export const ERASER_RADIUS_PT = 6;
 const SELECTION_PAD_PT = 10;
 
@@ -29,6 +38,7 @@ export class EditorController {
   selection: Id[] = [];
   private selectionPage: Id | null = null;
   private live: Live | null = null;
+  onTextRequest: ((req: TextRequest) => void) | null = null;
 
   constructor(private session: EditorSession, public opts: { scribbleToErase: boolean; autoShapes: boolean }, private now: () => number = () => Date.now()) {}
 
@@ -50,15 +60,19 @@ export class EditorController {
     this.styles[p.tool] = clampStyle(p.style);
   }
 
-  private visible(pageId: Id): { strokes: Stroke[]; shapes: Shape[] } {
+  private visible(pageId: Id): { strokes: Stroke[]; shapes: Shape[]; textBoxes: TextBox[] } {
     const s = this.session.history.state;
-    return { strokes: (s.strokes[pageId] ?? []).filter((x) => !x.hidden), shapes: (s.shapes[pageId] ?? []).filter((x) => !x.hidden) };
+    return {
+      strokes: (s.strokes[pageId] ?? []).filter((x) => !x.hidden),
+      shapes: (s.shapes[pageId] ?? []).filter((x) => !x.hidden),
+      textBoxes: (s.textBoxes?.[pageId] ?? []).filter((x) => !x.hidden),
+    };
   }
 
   selectionBBox(): BBox | null {
     if (!this.selection.length || !this.selectionPage) return null;
-    const { strokes, shapes } = this.visible(this.selectionPage);
-    return selectionBounds(strokes, shapes, this.selection);
+    const { strokes, shapes, textBoxes } = this.visible(this.selectionPage);
+    return selectionBounds(strokes, shapes, this.selection, textBoxes);
   }
 
   private erase(pageId: Id, x: number, y: number): void {
@@ -111,6 +125,16 @@ export class EditorController {
       if (live.erased?.size) await this.session.run({ type: 'hideObjects', pageId, ids: [...live.erased] });
       return;
     }
+    if (this.tool === 'text') {
+      const [x0, y0] = [live.points[0], live.points[1]];
+      const n = live.points.length;
+      if (Math.hypot(live.points[n - 4] - x0, live.points[n - 3] - y0) > TAP_MAX_MOVE_PT) return;
+      const { textBoxes } = this.visible(pageId);
+      const hit = textBoxesAt(x0, y0, textBoxes)[0];
+      const existing = hit ? textBoxes.find((t) => t.id === hit) : undefined;
+      this.onTextRequest?.(existing ? { pageId, x: x0, y: y0, existing } : { pageId, x: x0, y: y0 });
+      return;
+    }
     if (this.tool === 'lasso') {
       if (live.dragFrom) {
         const n = live.points.length;
@@ -121,15 +145,15 @@ export class EditorController {
       }
       const poly: [number, number][] = [];
       for (let i = 0; i < pts.length; i += 4) poly.push([pts[i], pts[i + 1]]);
-      const { strokes, shapes } = this.visible(pageId);
-      this.selection = poly.length >= 3 ? objectsInLasso(poly, strokes, shapes) : [];
+      const { strokes, shapes, textBoxes } = this.visible(pageId);
+      this.selection = poly.length >= 3 ? objectsInLasso(poly, strokes, shapes, textBoxes) : [];
       this.selectionPage = pageId;
       return;
     }
 
     if (this.tool === 'pen' && this.opts.scribbleToErase && isScribble(pts)) {
-      const { strokes, shapes } = this.visible(pageId);
-      const targets = scribbleTargets(pts, strokes, shapes);
+      const { strokes, shapes, textBoxes } = this.visible(pageId);
+      const targets = scribbleTargets(pts, strokes, shapes, textBoxes);
       if (targets.length) {
         await this.session.run({ type: 'hideObjects', pageId, ids: targets });
         return;
@@ -156,6 +180,35 @@ export class EditorController {
   }
 
   private author() { return this.session.author; }
+
+  /** Apply the text box editor's result: add, edit, or hide when emptied. */
+  async commitText(pageId: Id, existing: TextBox | undefined, v: TextValue): Promise<void> {
+    const text = v.text.replace(/\s+$/u, '');
+    const empty = !text.trim();
+    const lines = Math.max(1, text.split('\n').length);
+    const h = Math.ceil(lines * v.sizePt * 1.4);
+    if (!existing) {
+      if (empty) return;
+      const t = this.now();
+      await this.session.run({
+        type: 'addTextBox',
+        box: { id: newId(), pageId, x: v.x, y: v.y, w: v.w, h, text, font: 'sarabun', sizePt: v.sizePt, color: v.color, bold: v.bold, author: this.author(), createdAt: t, updatedAt: t },
+      });
+      return;
+    }
+    if (empty) {
+      await this.session.run({ type: 'hideObjects', pageId, ids: [existing.id] });
+      return;
+    }
+    const patch: Partial<TextBox> = {};
+    for (const k of ['text', 'sizePt', 'color', 'bold', 'x', 'y', 'w'] as const) {
+      const nv = k === 'text' ? text : v[k];
+      if (existing[k] !== nv) (patch as Record<string, unknown>)[k] = nv;
+    }
+    if (existing.h !== h) patch.h = h;
+    if (!Object.keys(patch).length) return;
+    await this.session.run({ type: 'editTextBox', pageId, id: existing.id, patch, updatedAt: this.now() });
+  }
 
   async deleteSelection(): Promise<void> {
     if (!this.selection.length || !this.selectionPage) return;

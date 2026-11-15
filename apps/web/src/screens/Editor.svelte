@@ -5,6 +5,12 @@
   import { InputRouter, type InputMode, type PointerSample, type RouterAction } from '@pnote/ink/input-router';
   import { PageRenderer } from '@pnote/ink/renderer';
   import type { Library } from '@pnote/storage/library';
+  import type { BlobStore } from '@pnote/storage/blob-store';
+  import type { TextBox } from '@pnote/core/types';
+  import PageNavigator from '../components/PageNavigator.svelte';
+  import TextBoxEditor from '../components/TextBoxEditor.svelte';
+  import { PageSources } from '../lib/page-sources';
+  import type { TextValue } from '../lib/editor-controller';
   import Toolbar from '../components/Toolbar.svelte';
   import PageStrip from '../components/PageStrip.svelte';
   import { EditorController, type ActiveTool } from '../lib/editor-controller';
@@ -14,7 +20,14 @@
   import { loadSettings, saveSettings } from '../lib/settings';
   import { createRenderPlan } from '../lib/render-plan';
 
-  let { lib, author, docId, onClose }: { lib: Library; author: Author; docId: Id; onClose: () => void } = $props();
+  let { lib, blobs, author, docId, onClose }: { lib: Library; blobs?: BlobStore; author: Author; docId: Id; onClose: () => void } = $props();
+
+  let sources = $state<PageSources | null>(null);
+  let bg: CanvasImageSource | null = null;
+  let bgKey = '';
+  let bgTimer: ReturnType<typeof setTimeout> | null = null;
+  let textReq = $state<{ pageId: Id; x: number; y: number; existing?: TextBox } | null>(null);
+  let viewSnap = $state({ scale: 1, offsetX: 0, offsetY: 0 });
 
   let session = $state<EditorSession | null>(null);
   let ctrl: EditorController | null = null;
@@ -61,6 +74,8 @@
     if (destroyed) { await s.close(); return; }
     ctrl = new EditorController(s, { scribbleToErase: settings.scribble, autoShapes: settings.autoShapes });
     router = new InputRouter(ctrl.mode);
+    ctrl.onTextRequest = (r) => { viewSnap = { ...view }; textReq = r; };
+    if (blobs && s.meta.kind !== 'notebook') sources = new PageSources(s.meta, blobs);
     s.history.onChange(() => { version++; plan.markBase(); requestRender(); });
     s.onSaveError(() => { saveError = true; });
     auditBroken = s.auditBroken;
@@ -99,7 +114,9 @@
       const erasing = ctrl?.erasing ?? new Set<Id>();
       const strokes = (st.strokes[page.id] ?? []).map((s) => (erasing.has(s.id) ? { ...s, hidden: true } : s));
       const shapes = (st.shapes[page.id] ?? []).map((s) => (erasing.has(s.id) ? { ...s, hidden: true } : s));
-      renderer.renderPage(page, strokes, shapes);
+      const texts = (st.textBoxes?.[page.id] ?? []).map((t) => (textReq?.existing?.id === t.id ? { ...t, hidden: true } : t));
+      renderer.renderPage(page, strokes, shapes, texts, bgKey === bgWant() ? bg : null);
+      loadBackground();
     }
     if (!todo.live) return;
     const pts = ctrl?.livePoints();
@@ -110,6 +127,36 @@
       renderer.clearLive();
       drawSelection();
     }
+  }
+
+  function bgWant(): string {
+    if (!page || page.source.type === 'blank') return '';
+    const px = Math.round(page.widthPt * view.scale * (window.devicePixelRatio || 1));
+    return `${page.id}:${Math.ceil(px / 256) * 256}`;
+  }
+
+  /** Fetch the page background; on zoom wait 200 ms after the last change. */
+  function loadBackground() {
+    const want = bgWant();
+    if (!sources || !page || !want || want === bgKey) return;
+    const sameP = bgKey.split(':')[0] === page.id;
+    if (bgTimer) clearTimeout(bgTimer);
+    bgTimer = setTimeout(async () => {
+      bgTimer = null;
+      const target = page, key = bgWant();
+      const px = Math.round(target.widthPt * view.scale * (window.devicePixelRatio || 1));
+      try {
+        const img = await sources!.background(target, px);
+        if (bgWant() !== key) return;
+        bg = img; bgKey = key; plan.markBase(); requestRender();
+        void sources!.prefetchAround(pageIndex, px);
+      } catch { /* shown as a white page */ }
+    }, sameP ? 200 : 0);
+  }
+
+  async function commitText(v: TextValue) {
+    const r = textReq; textReq = null;
+    if (r && ctrl) { await ctrl.commitText(r.pageId, r.existing, v); version++; plan.markBase(); requestRender(); }
   }
 
   function drawLasso(pts: Float32Array) {
@@ -264,7 +311,7 @@
   }
 
   async function close() { await session?.close(); onClose(); }
-  onDestroy(() => { destroyed = true; if (raf) cancelAnimationFrame(raf); void session?.close(); });
+  onDestroy(() => { destroyed = true; if (raf) cancelAnimationFrame(raf); if (bgTimer) clearTimeout(bgTimer); void session?.close(); void sources?.destroy(); });
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -298,7 +345,12 @@
     <canvas bind:this={base} class="layer"></canvas>
     <canvas bind:this={live} class="layer"></canvas>
   </div>
-  {#if session && !tb.fullscreen}
+  {#if textReq && ctrl}
+    <TextBoxEditor x={textReq.x} y={textReq.y} existing={textReq.existing} color={ctrl.style.color} view={viewSnap} onDone={commitText} onCancel={() => { textReq = null; plan.markBase(); requestRender(); }} />
+  {/if}
+  {#if session && !tb.fullscreen && pages.length > 20}
+    <PageNavigator {pages} current={pageIndex} {sources} onSelect={(i) => { pageIndex = i; fitted = false; plan.markBase(); requestRender(); }} />
+  {:else if session && !tb.fullscreen}
     <PageStrip {pages} current={pageIndex} readOnly={session.readOnly} onSelect={(i) => { pageIndex = i; fitted = false; requestRender(); }} onAdd={addPage} onRemove={removePage} onMove={movePage} />
   {/if}
 </div>

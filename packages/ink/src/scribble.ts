@@ -1,6 +1,6 @@
-import type { Id, Shape, Stroke } from '@pnote/core/types';
+import type { Id, Shape, Stroke, TextBox } from '@pnote/core/types';
 import { distToSegment, segmentsIntersect, shapePolyline } from './geometry';
-import { shapeBBox, strokeBBox, type BBox } from './hit-test';
+import { shapeBBox, strokeBBox, textBoxBBox, type BBox } from './hit-test';
 
 export const SCRIBBLE_MIN_REVERSALS = 3;
 export const SCRIBBLE_MIN_LEG_PT = 4;
@@ -86,7 +86,7 @@ function crosses(scribble: number[], target: number[], halfWidth: number): boole
   return false;
 }
 
-export function scribbleTargets(points: Float32Array, strokes: Stroke[], shapes: Shape[]): Id[] {
+export function scribbleTargets(points: Float32Array, strokes: Stroke[], shapes: Shape[], textBoxes: TextBox[] = []): Id[] {
   const xy = xyOf(points);
   const sb = bboxOf(xy);
   const out: Id[] = [];
@@ -97,6 +97,15 @@ export function scribbleTargets(points: Float32Array, strokes: Stroke[], shapes:
   for (const s of shapes) {
     if (s.hidden || !overlaps(sb, shapeBBox(s), s.style.width)) continue;
     if (crosses(xy, shapePolyline(s.geometry), s.style.width / 2)) out.push(s.id);
+  }
+  for (const t of textBoxes) {
+    if (t.hidden) continue;
+    const b = textBoxBBox(t);
+    if (!overlaps(sb, b, 0)) continue;
+    // count the scribble points inside the box: a scribble across a text box mostly lies inside it
+    let inside = 0;
+    for (let i = 0; i < xy.length; i += 2) if (xy[i] >= b.minX && xy[i] <= b.maxX && xy[i + 1] >= b.minY && xy[i + 1] <= b.maxY) inside++;
+    if (inside / (xy.length / 2) >= 0.5) out.push(t.id);
   }
   return out;
 }

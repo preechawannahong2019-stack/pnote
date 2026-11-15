@@ -2,6 +2,10 @@ import { mount } from 'svelte';
 import { IndexedDbAdapter } from '@pnote/storage/idb-adapter';
 import { WebNoDeviceKey } from '@pnote/storage/device-key';
 import App from './App.svelte';
+import '@fontsource/sarabun/thai-400.css';
+import '@fontsource/sarabun/thai-700.css';
+import '@fontsource/sarabun/latin-400.css';
+import '@fontsource/sarabun/latin-700.css';
 import './app.css';
 
 let persistAsked = false;

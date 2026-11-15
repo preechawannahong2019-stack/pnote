@@ -1,4 +1,4 @@
-import type { Id, Shape, Stroke } from '@pnote/core/types';
+import type { Id, Shape, Stroke, TextBox } from '@pnote/core/types';
 import { distToSegment, pointInPolygon, shapePolyline } from './geometry';
 
 export interface BBox { minX: number; minY: number; maxX: number; maxY: number }
@@ -69,7 +69,15 @@ export function shapesNearPoint(x: number, y: number, radiusPt: number, shapes: 
 
 export const LASSO_MIN_INSIDE = 0.5;
 
-export function objectsInLasso(lasso: [number, number][], strokes: Stroke[], shapes: Shape[]): Id[] {
+export function textBoxBBox(t: TextBox): BBox {
+  return { minX: t.x, minY: t.y, maxX: t.x + t.w, maxY: t.y + t.h };
+}
+
+export function textBoxesAt(x: number, y: number, boxes: TextBox[]): Id[] {
+  return boxes.filter((t) => !t.hidden && x >= t.x && x <= t.x + t.w && y >= t.y && y <= t.y + t.h).map((t) => t.id);
+}
+
+export function objectsInLasso(lasso: [number, number][], strokes: Stroke[], shapes: Shape[], textBoxes: TextBox[] = []): Id[] {
   const out: Id[] = [];
   for (const s of strokes) {
     if (s.hidden) continue;
@@ -85,6 +93,9 @@ export function objectsInLasso(lasso: [number, number][], strokes: Stroke[], sha
     if (s.hidden) continue;
     const b = shapeBBox(s);
     if (pointInPolygon((b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2, lasso)) out.push(s.id);
+  }
+  for (const t of textBoxes) {
+    if (!t.hidden && pointInPolygon(t.x + t.w / 2, t.y + t.h / 2, lasso)) out.push(t.id);
   }
   return out;
 }
