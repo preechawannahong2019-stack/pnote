@@ -12,6 +12,7 @@
   import { PageSources } from '../lib/page-sources';
   import { OcrQueue } from '@pnote/pdf/ocr-queue';
   import { createTesseractEngine } from '@pnote/pdf/ocr';
+  import { searchPage } from '@pnote/pdf/search';
   import type { TextValue } from '../lib/editor-controller';
   import Toolbar from '../components/Toolbar.svelte';
   import PageStrip from '../components/PageStrip.svelte';
@@ -22,7 +23,12 @@
   import { loadSettings, saveSettings } from '../lib/settings';
   import { createRenderPlan } from '../lib/render-plan';
 
-  let { lib, blobs, author, docId, onClose }: { lib: Library; blobs?: BlobStore; author: Author; docId: Id; onClose: () => void } = $props();
+  let { lib, blobs, author, docId, onClose, initialPage = 0, highlight = '' }: {
+    lib: Library; blobs?: BlobStore; author: Author; docId: Id; onClose: () => void; initialPage?: number; highlight?: string;
+  } = $props();
+  let findText = $state(highlight);
+  let findOpen = $state(false);
+  let findRects = $state<[number, number, number, number][]>([]);
 
   let sources = $state<PageSources | null>(null);
   let bg: CanvasImageSource | null = null;
@@ -60,7 +66,7 @@
   let presets = $state<PenPreset[]>([]);
   let tb = $state<ToolbarState>(loadToolbarState(window.innerWidth));
   let settings = $state(loadSettings());
-  let pageIndex = $state(0);
+  let pageIndex = $state(initialPage);
   let version = $state(0);
   let view = { scale: 1, offsetX: 0, offsetY: 0 };
   let fitted = false;
@@ -144,6 +150,40 @@
     } else {
       renderer.clearLive();
       drawSelection();
+      drawFind();
+    }
+  }
+
+  function drawFind() {
+    if (!findRects.length || !live) return;
+    const ctx = live.getContext('2d')!;
+    const dpr = window.devicePixelRatio || 1;
+    ctx.setTransform(view.scale * dpr, 0, 0, view.scale * dpr, view.offsetX * dpr, view.offsetY * dpr);
+    ctx.fillStyle = 'rgba(255, 196, 0, 0.35)';
+    for (const [x0, y0, x1, y1] of findRects) ctx.fillRect(x0 - 1, y0 - 1, x1 - x0 + 2, y1 - y0 + 2);
+  }
+
+  $effect(() => {
+    const q = findText.trim();
+    const pg = page;
+    void version;
+    if (!q || !pg || !session) { findRects = []; plan.markLive(); requestRender(); return; }
+    let alive = true;
+    lib.getTextLayer(session.meta.id, pg.id).then((layer) => {
+      if (!alive) return;
+      findRects = searchPage(layer, session!.history.state.textBoxes?.[pg.id] ?? [], q)?.rects ?? [];
+      plan.markLive(); requestRender();
+    }).catch(() => {});
+    return () => { alive = false; };
+  });
+
+  async function findNext(dir: 1 | -1) {
+    if (!session || !findText.trim()) return;
+    const pages = session.history.state.pages;
+    for (let k = 1; k <= pages.length; k++) {
+      const i = (pageIndex + dir * k + pages.length) % pages.length;
+      const layer = await lib.getTextLayer(session.meta.id, pages[i].id);
+      if (searchPage(layer, session.history.state.textBoxes?.[pages[i].id] ?? [], findText)) { pageIndex = i; fitted = false; plan.markBase(); requestRender(); return; }
     }
   }
 
@@ -289,6 +329,7 @@
   function onKey(e: KeyboardEvent) {
     if ((e.target as HTMLElement)?.closest?.('input, select, textarea')) return;
     const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.key.toLowerCase() === 'f') { e.preventDefault(); findOpen = true; return; }
     if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); void (e.shiftKey ? redo() : undo()); }
     else if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); void redo(); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && ctrl?.selection.length) { e.preventDefault(); void deleteSelection(); }
@@ -347,6 +388,14 @@
     />
     {#if session.readOnly}<div class="ro" role="status">{READ_ONLY_MESSAGE}</div>{/if}
     {#if saveError && version >= 0 && session.saveFailed}<div class="ro err" role="alert">บันทึกไม่สำเร็จ กำลังลองใหม่ — อย่าปิดแอป</div>{/if}
+    {#if findOpen || findText}
+      <form class="find" role="search" onsubmit={(e) => { e.preventDefault(); void findNext(1); }}>
+        <input aria-label="ค้นหาในเอกสาร" placeholder="ค้นหาในเอกสาร" bind:value={findText} />
+        <button type="button" aria-label="ผลก่อนหน้า" onclick={() => findNext(-1)}>▲</button>
+        <button type="submit" aria-label="ผลถัดไป">▼</button>
+        <button type="button" aria-label="ปิดการค้นหา" onclick={() => { findText = ''; findOpen = false; }}>✕</button>
+      </form>
+    {/if}
     {#if ocrProgress}<div class="chip" role="status">กำลังอ่านข้อความ {ocrProgress.done}/{ocrProgress.total}</div>{/if}
     {#if auditBroken}<div class="ro err" role="alert">ประวัติการแก้ไขของเอกสารนี้ไม่ต่อเนื่อง อาจถูกแก้ไขจากภายนอก</div>{/if}
   {:else if openError}
@@ -378,6 +427,9 @@
   .editor { position: fixed; inset: 0; background: #dfe3ea; overflow: hidden; }
   .canvas-host { position: absolute; inset: 0; touch-action: none; user-select: none; -webkit-user-select: none; }
   .layer { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .find { position: absolute; top: 60px; right: 12px; z-index: 11; display: flex; gap: 4px; background: #fff; padding: 6px; border-radius: 10px; box-shadow: 0 2px 10px #0002; }
+  .find input { width: 180px; padding: 4px 8px; }
+  .find button { padding: 4px 8px; }
   .chip { position: absolute; bottom: 60px; right: 12px; z-index: 11; background: #ffffffee; padding: 4px 10px; border-radius: 999px; font-size: 13px; box-shadow: 0 1px 4px #0002; }
   .open-error { position: relative; z-index: 12; }
   .err { background: #fde2e1 !important; color: #8c1d18; top: 96px !important; }

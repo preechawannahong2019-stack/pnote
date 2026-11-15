@@ -5,6 +5,8 @@
   import { BlobStore } from '@pnote/storage/blob-store';
   import Editor from './Editor.svelte';
   import Thumbnail from '../components/Thumbnail.svelte';
+  import SearchResults from '../components/SearchResults.svelte';
+  import { searchLibrary, type SearchHit } from '@pnote/pdf/search';
 
   let { store, author, onLock }: { store: EncryptedStore; author: Author; onLock: () => void } = $props();
   const lib = new Library(store, author);
@@ -16,6 +18,30 @@
   let folderId = $state<Id | null>(null);
   let query = $state('');
   let openDoc = $state<Id | null>(null);
+  let openPage = $state(0);
+  let found = $state<{ titleMatches: DocumentMeta[]; hits: SearchHit[] }>({ titleMatches: [], hits: [] });
+  let searching = $state(false);
+  let allDocs = $state(new Map<Id, DocumentMeta>());
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  let searchAbort: AbortController | null = null;
+
+  $effect(() => {
+    const q = query.trim();
+    if (searchTimer) clearTimeout(searchTimer);
+    searchAbort?.abort();
+    if (!q) { found = { titleMatches: [], hits: [] }; return; }
+    searchTimer = setTimeout(async () => {
+      const ac = (searchAbort = new AbortController());
+      searching = true;
+      try {
+        allDocs = new Map((await lib.searchByTitle('')).map((d) => [d.id, d]));
+        const r = await searchLibrary(lib, q, { signal: ac.signal });
+        if (!ac.signal.aborted) found = r;
+      } finally {
+        if (!ac.signal.aborted) searching = false;
+      }
+    }, 300);
+  });
   let dialog = $state<null | 'notebook' | 'folder'>(null);
   let newTitle = $state('');
   let newTemplate = $state<PageTemplate>('plain');
@@ -68,7 +94,7 @@
 </script>
 
 {#if openDoc}
-  <Editor {lib} {blobs} {author} docId={openDoc} onClose={() => (openDoc = null)} />
+  <Editor {lib} {blobs} {author} docId={openDoc} initialPage={openPage} highlight={query.trim()} onClose={() => { openDoc = null; openPage = 0; }} />
 {:else}
   <div class="library">
     <header>
@@ -83,6 +109,9 @@
     </header>
 
     {#if error}<p class="error" role="alert">{error}</p>{/if}
+    {#if query.trim()}
+      <SearchResults titleMatches={found.titleMatches} hits={found.hits} docs={allDocs} busy={searching} onOpen={(id, i) => { openPage = i; openDoc = id; }} />
+    {/if}
 
     <section class="grid">
       {#each childFolders as f (f.id)}
