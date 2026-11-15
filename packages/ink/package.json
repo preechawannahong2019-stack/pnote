@@ -8,6 +8,7 @@
     "./*": "./src/*.ts"
   },
   "dependencies": {
-    "@pnote/core": "*"
+    "@pnote/core": "*",
+    "perfect-freehand": "^1.2.3"
   }
 }
