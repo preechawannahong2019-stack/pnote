@@ -8,6 +8,17 @@ export interface OcrEngine {
   terminate(): Promise<void>;
 }
 
+/** Tesseract.js reads <canvas>, not ImageBitmap/OffscreenCanvas: copy onto a plain canvas. */
+export function toCanvas(image: CanvasImageSource): HTMLCanvasElement {
+  if (typeof HTMLCanvasElement !== 'undefined' && image instanceof HTMLCanvasElement) return image;
+  const src = image as { width: number; height: number };
+  const c = document.createElement('canvas');
+  c.width = src.width;
+  c.height = src.height;
+  c.getContext('2d')!.drawImage(image, 0, 0);
+  return c;
+}
+
 export interface TesseractPaths { workerPath: string; corePath: string; langPath: string }
 
 /** Tesseract (WASM, in a Web Worker) reading Thai + English, all assets from the app origin. */
@@ -24,7 +35,7 @@ export async function createTesseractEngine(paths: TesseractPaths): Promise<OcrE
   await worker.setParameters({ tessedit_pageseg_mode: '3' as never, preserve_interword_spaces: '1' });
   return {
     async recognize(image, pageWidthPt) {
-      const canvas = image as HTMLCanvasElement;
+      const canvas = toCanvas(image);
       const scale = pageWidthPt / (canvas.width || 1);
       const { data } = await worker.recognize(canvas as never, {}, { blocks: true });
       const out: OcrWord[] = [];

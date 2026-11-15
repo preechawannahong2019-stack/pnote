@@ -6,12 +6,31 @@
   import Editor from './Editor.svelte';
   import Thumbnail from '../components/Thumbnail.svelte';
   import SearchResults from '../components/SearchResults.svelte';
+  import ImportButton from '../components/ImportButton.svelte';
+  import { importFile, makeImporter } from '../lib/import-export';
   import { searchLibrary, type SearchHit } from '@pnote/pdf/search';
 
   let { store, author, onLock }: { store: EncryptedStore; author: Author; onLock: () => void } = $props();
   const lib = new Library(store, author);
   const blobs = new BlobStore(store);
   lib.cleanupOrphans().catch(() => {});
+  const importer = makeImporter(lib, blobs, author);
+  let importing = $state<string | null>(null);
+  let dragOver = $state(false);
+
+  async function importFiles(files: File[]) {
+    error = '';
+    let lastOk: DocumentMeta | null = null;
+    for (const f of files) {
+      importing = `กำลังนำเข้า ${f.name}`;
+      const r = await importFile(importer, f, folderId, (p) => (importing = `กำลังนำเข้า ${f.name} ${Math.round(p * 100)}%`));
+      if (typeof r === 'string') error = `${f.name}: ${r}`;
+      else lastOk = r;
+    }
+    importing = null;
+    await refresh();
+    if (lastOk && files.length === 1) openDoc = lastOk.id;
+  }
 
   let folders = $state<Folder[]>([]);
   let docs = $state<DocumentMeta[]>([]);
@@ -103,17 +122,21 @@
         {#each crumbs as c (c.id)}<span>›</span><button class="link" onclick={() => (folderId = c.id)}>{c.name}</button>{/each}
       </nav>
       <input class="search" type="search" placeholder="ค้นหาชื่อเอกสาร" aria-label="ค้นหาชื่อเอกสาร" bind:value={query} />
+      <ImportButton busy={!!importing} onFiles={importFiles} />
       <button onclick={() => { dialog = 'folder'; newTitle = ''; }}>＋ โฟลเดอร์</button>
       <button class="primary" onclick={() => { dialog = 'notebook'; newTitle = 'สมุดใหม่'; }}>＋ สมุดใหม่</button>
       <button onclick={onLock}>🔒 ล็อก</button>
     </header>
 
     {#if error}<p class="error" role="alert">{error}</p>{/if}
+    {#if importing}<p role="status">{importing}</p>{/if}
     {#if query.trim()}
       <SearchResults titleMatches={found.titleMatches} hits={found.hits} docs={allDocs} busy={searching} onOpen={(id, i) => { openPage = i; openDoc = id; }} />
     {/if}
 
-    <section class="grid">
+    <section class="grid" class:drag={dragOver} aria-label="เอกสาร"
+      ondragover={(e) => { e.preventDefault(); dragOver = true; }} ondragleave={() => (dragOver = false)}
+      ondrop={(e) => { e.preventDefault(); dragOver = false; const fs = [...(e.dataTransfer?.files ?? [])]; if (fs.length) void importFiles(fs); }}>
       {#each childFolders as f (f.id)}
         <div class="card folder">
           <button class="open" onclick={() => (folderId = f.id)}>📁 {f.name}</button>
@@ -168,7 +191,8 @@
   .crumbs { display: flex; gap: 4px; align-items: center; margin-right: auto; font-size: 18px; }
   .link { border: 0; background: none; padding: 4px; font-weight: 600; }
   .search { min-width: 200px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px; }
+  .grid.drag { outline: 3px dashed var(--accent); outline-offset: 6px; }
+  .grid { min-height: 200px; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px; }
   .card { background: #fff; border-radius: 12px; padding: 8px; box-shadow: 0 1px 4px #0001; display: flex; flex-direction: column; gap: 6px; }
   .card.folder { flex-direction: row; align-items: center; }
   .open { border: 0; background: none; padding: 0; display: flex; flex-direction: column; gap: 6px; text-align: left; flex: 1; }

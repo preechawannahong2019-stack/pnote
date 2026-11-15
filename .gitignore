@@ -4,3 +4,4 @@ dist
 test-results
 playwright-report
 apps/web/public/vendor
+apps/web/e2e/.fixtures

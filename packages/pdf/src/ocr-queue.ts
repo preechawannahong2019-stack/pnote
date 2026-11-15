@@ -52,6 +52,7 @@ export class OcrQueue {
     const todo = pages.filter((p) => p.source.type !== 'blank' && !have.has(p.id));
     let done = 0;
     if (!todo.length) { this.progress.forEach((cb) => cb(0, 0)); return; }
+    this.progress.forEach((cb) => cb(0, todo.length));
     for (const page of todo) {
       if (this.stopped) return;
       try {

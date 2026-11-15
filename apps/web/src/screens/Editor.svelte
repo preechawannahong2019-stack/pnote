@@ -13,6 +13,8 @@
   import { OcrQueue } from '@pnote/pdf/ocr-queue';
   import { createTesseractEngine } from '@pnote/pdf/ocr';
   import { searchPage } from '@pnote/pdf/search';
+  import ExportDialog from '../components/ExportDialog.svelte';
+  import { buildExport } from '../lib/import-export';
   import type { TextValue } from '../lib/editor-controller';
   import Toolbar from '../components/Toolbar.svelte';
   import PageStrip from '../components/PageStrip.svelte';
@@ -36,6 +38,29 @@
   let bgTimer: ReturnType<typeof setTimeout> | null = null;
   let textReq = $state<{ pageId: Id; x: number; y: number; existing?: TextBox } | null>(null);
   let viewSnap = $state({ scale: 1, offsetX: 0, offsetY: 0 });
+  let exporting = $state<null | { busy: boolean; error: string }>(null);
+  const canShare = typeof navigator !== 'undefined' && !!navigator.canShare?.({ files: [new File([], 'x.pdf', { type: 'application/pdf' })] });
+
+  async function doExport(o: { includeTextLayer: boolean }, share: boolean) {
+    if (!session || !blobs) return;
+    exporting = { busy: true, error: '' };
+    try {
+      await session.flushNow();
+      const { bytes, name } = await buildExport(lib, blobs, session.meta.id, author, { includeTextLayer: o.includeTextLayer, includeCertificate: true });
+      const file = new File([bytes as Uint8Array<ArrayBuffer>], name, { type: 'application/pdf' });
+      if (share) await navigator.share({ files: [file], title: session.meta.title });
+      else {
+        const url = URL.createObjectURL(file);
+        const a = Object.assign(document.createElement('a'), { href: url, download: name });
+        document.body.append(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      }
+      exporting = null;
+    } catch (e) {
+      if ((e as Error)?.name === 'AbortError') { exporting = null; return; }
+      exporting = { busy: false, error: 'ส่งออกไม่สำเร็จ' };
+    }
+  }
   let ocr: OcrQueue | null = null;
   let ocrProgress = $state<{ done: number; total: number } | null>(null);
 
@@ -388,6 +413,11 @@
     />
     {#if session.readOnly}<div class="ro" role="status">{READ_ONLY_MESSAGE}</div>{/if}
     {#if saveError && version >= 0 && session.saveFailed}<div class="ro err" role="alert">บันทึกไม่สำเร็จ กำลังลองใหม่ — อย่าปิดแอป</div>{/if}
+    {#if !tb.fullscreen && blobs}<button class="export" aria-label="ส่งออก" onclick={() => (exporting = { busy: false, error: '' })}>⤴ ส่งออก</button>{/if}
+    {#if exporting}
+      <ExportDialog busy={exporting.busy} error={exporting.error} {canShare} onCancel={() => (exporting = null)}
+        onDownload={(o) => doExport(o, false)} onShare={(o) => doExport(o, true)} />
+    {/if}
     {#if findOpen || findText}
       <form class="find" role="search" onsubmit={(e) => { e.preventDefault(); void findNext(1); }}>
         <input aria-label="ค้นหาในเอกสาร" placeholder="ค้นหาในเอกสาร" bind:value={findText} />
@@ -427,10 +457,11 @@
   .editor { position: fixed; inset: 0; background: #dfe3ea; overflow: hidden; }
   .canvas-host { position: absolute; inset: 0; touch-action: none; user-select: none; -webkit-user-select: none; }
   .layer { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .export { position: absolute; z-index: 11; right: 12px; bottom: 60px; padding: 6px 12px; box-shadow: 0 2px 8px #0002; }
   .find { position: absolute; top: 60px; right: 12px; z-index: 11; display: flex; gap: 4px; background: #fff; padding: 6px; border-radius: 10px; box-shadow: 0 2px 10px #0002; }
   .find input { width: 180px; padding: 4px 8px; }
   .find button { padding: 4px 8px; }
-  .chip { position: absolute; bottom: 60px; right: 12px; z-index: 11; background: #ffffffee; padding: 4px 10px; border-radius: 999px; font-size: 13px; box-shadow: 0 1px 4px #0002; }
+  .chip { position: absolute; bottom: 100px; right: 12px; z-index: 11; background: #ffffffee; padding: 4px 10px; border-radius: 999px; font-size: 13px; box-shadow: 0 1px 4px #0002; }
   .open-error { position: relative; z-index: 12; }
   .err { background: #fde2e1 !important; color: #8c1d18; top: 96px !important; }
   .ro { position: absolute; top: 56px; left: 50%; transform: translateX(-50%); z-index: 11; background: #fff4d6; padding: 6px 12px; border-radius: 8px; }
