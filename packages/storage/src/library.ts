@@ -157,6 +157,27 @@ export class Library {
   /** Every document in the library index (all folders). */
   async allDocuments(): Promise<DocumentMeta[]> { return this.index(); }
 
+  /** Every document with a meta.json, including ones hidden because an imported copy replaced them. */
+  async allDocumentsIncludingReplaced(): Promise<DocumentMeta[]> {
+    const out: DocumentMeta[] = [];
+    for (const p of await this.store.list('documents/')) {
+      if (!/^documents\/[^/]+\/meta\.json$/.test(p)) continue;
+      const m = await this.store.getJSON<DocumentMeta>(p);
+      if (m) out.push(m);
+    }
+    return out.sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  /** Documents hidden by a replacing import: kept on disk, listed here so they can still be opened. */
+  async listReplaced(): Promise<DocumentMeta[]> {
+    return (await this.allDocumentsIncludingReplaced()).filter((d) => d.replacedBy);
+  }
+
+  /** Write the meta of an imported document that was already hidden (replaced) in the backup: not added to the index. */
+  async publishImportedHidden(meta: DocumentMeta): Promise<void> {
+    await this.store.putJSON(`${docDir(meta.id)}/meta.json`, meta);
+  }
+
   /** Raw access to the profile's encrypted files, for .pnote backup and restore only. */
   backupAccess(): EncryptedStore { return this.store; }
 
@@ -167,6 +188,9 @@ export class Library {
   async hideReplaced(id: Id, by: Id): Promise<void> {
     await this.locked(async () => {
       const meta = await this.getMeta(id);
+      const audit = (await this.store.getJSON<AuditEntry[]>(`${docDir(id)}/audit.json`)) ?? [];
+      await this.store.putJSON(`${docDir(id)}/audit.json`,
+        await appendAudit(audit, { time: Date.now(), author: this.author, action: 'doc.replace', objectIds: [id, by] }));
       await this.store.putJSON(`${docDir(id)}/meta.json`, { ...meta, replacedBy: by });
       await this.store.putJSON(INDEX, (await this.index()).filter((d) => d.id !== id));
     });

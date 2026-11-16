@@ -1,11 +1,11 @@
 <script lang="ts">
   import type { DocumentMeta, Id } from '@pnote/core/types';
-  import type { ConflictChoice } from '@pnote/storage/backup-io';
+  import type { ConflictChoice, ImportResult } from '@pnote/storage/backup-io';
   import { backupErrorText } from '../lib/backup-flow';
   let { file, run, onDone, onCancel }: {
     file: File;
-    run: (password: string, choose: (existing: DocumentMeta, incoming: { id: Id; title: string }) => Promise<ConflictChoice>) => Promise<DocumentMeta[]>;
-    onDone: (imported: DocumentMeta[]) => void; onCancel: () => void;
+    run: (password: string, choose: (existing: DocumentMeta, incoming: { id: Id; title: string }) => Promise<ConflictChoice>) => Promise<ImportResult>;
+    onDone: (result: ImportResult) => void; onCancel: () => void;
   } = $props();
   let password = $state('');
   let error = $state('');

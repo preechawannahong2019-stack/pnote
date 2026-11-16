@@ -20,6 +20,9 @@
       const r = await service.recover(profile.id, code, value);
       if (r.ok) onUnlocked(r);
       else { error = 'รหัสกู้คืนไม่ถูกต้อง'; step = 'code'; }
+    } catch (e) {
+      error = `กู้คืนไม่สำเร็จ: ${(e as Error)?.message ?? e}`;
+      step = 'code';
     } finally {
       busy = false;
     }

@@ -13,6 +13,27 @@ describe('FilesystemAdapter', () => {
     expect(await new FilesystemAdapter(fs).get('/p1/x')).toEqual(enc('old'));
   });
 
+  it('reports a read failure of an existing file instead of calling it missing', async () => {
+    const fs = memoryFs();
+    const a = new FilesystemAdapter(fs);
+    await a.put('/p1/index.json', enc('[1,2]'));
+    const read = fs.readFile;
+    fs.readFile = async () => { throw new Error('I/O error'); };
+    await expect(a.get('/p1/index.json')).rejects.toThrow('I/O error');
+    fs.readFile = read;
+    expect(await a.get('/p1/none')).toBeNull();
+  });
+
+  it('falls back to a complete temp file when the target vanished during the rename', async () => {
+    const fs = memoryFs();
+    const a = new FilesystemAdapter(fs);
+    await a.put('/p1/x', enc('old'));
+    const file = encodeKey('/p1/x');
+    fs.files.set(`${file}.tmp`, fs.files.get(file)!.replace(/.*/, btoa('new')));
+    fs.files.delete(file); // a rename that deletes the target first, killed half way
+    expect(await a.get('/p1/x')).toEqual(enc('new'));
+  });
+
   it('round-trips Thai keys and spaces and lists the original keys', async () => {
     const a = new FilesystemAdapter(memoryFs());
     await a.put('/p1/documents/สำนวน คดี/meta.json', enc('1'));

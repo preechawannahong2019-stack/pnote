@@ -10,8 +10,12 @@ public class PnoteIncomingPlugin: CAPPlugin, CAPBridgedPlugin {
     public let pluginMethods: [CAPPluginMethod] = []
 
     public override func load() {
+        let fm = FileManager.default
+        let inbox = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Inbox")
+        CacheSweep.sweep(caches: fm.urls(for: .cachesDirectory, in: .userDomainMask)[0], inbox: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(opened(_:)), name: .capacitorOpenURL, object: nil)
-        if let url = ApplicationDelegateProxy.shared.lastURL { handle(url) }
+        if let url = ApplicationDelegateProxy.shared.lastURL { handle(url) } // the launch file may be in Inbox: moved out first
+        CacheSweep.sweep(caches: fm.temporaryDirectory.appendingPathComponent("none"), inbox: inbox)
     }
 
     @objc private func opened(_ n: Notification) {
@@ -29,7 +33,9 @@ public class PnoteIncomingPlugin: CAPPlugin, CAPBridgedPlugin {
         let out = dir.appendingPathComponent(name.isEmpty ? "file" : name)
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try FileManager.default.copyItem(at: url, to: out)
+            // iOS already copied "Open in" files into Documents/Inbox (which is backed up): move those, copy others
+            if url.path.contains("/Documents/Inbox/") { try FileManager.default.moveItem(at: url, to: out) }
+            else { try FileManager.default.copyItem(at: url, to: out) }
         } catch { return }
         let mime: String
         switch url.pathExtension.lowercased() {

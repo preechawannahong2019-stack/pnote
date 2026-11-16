@@ -51,10 +51,22 @@ export class FilesystemAdapter implements StorageAdapter {
     return (this.prepared ??= (async () => { await this.fs.excludeFromBackup?.(this.root); })());
   }
 
+  /**
+   * Missing → null. A read that fails for a file that exists is rethrown (an empty answer would let the next write
+   * overwrite an index with a near-empty one). If only the temp file exists — a rename that removes the target
+   * before moving, interrupted — the temp file, which was completely written before the rename began, is returned.
+   */
   async get(path: string): Promise<Uint8Array | null> {
+    const file = encodeKey(path, this.root);
     try {
-      return fromBase64((await this.fs.readFile({ path: encodeKey(path, this.root) })).data);
-    } catch {
+      return fromBase64((await this.fs.readFile({ path: file })).data);
+    } catch (e) {
+      const dir = file.slice(0, file.lastIndexOf('/'));
+      const name = file.slice(dir.length + 1);
+      let names: Set<string>;
+      try { names = new Set((await this.fs.readdir({ path: dir })).files.map((f) => f.name)); } catch { return null; }
+      if (names.has(name)) throw e;
+      if (names.has(name + TMP)) return fromBase64((await this.fs.readFile({ path: file + TMP })).data);
       return null;
     }
   }

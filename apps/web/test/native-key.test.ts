@@ -21,7 +21,8 @@ describe('NativeDeviceKey', () => {
     expect(k.available).toBe(true);
     expect(await k.unwrap(await k.wrap(b))).toEqual(b);
   });
-  it.each(['KEY_MISSING', 'KEY_INVALID'])('maps %s to DeviceKeyMissing', async (code) => {
+  // DECRYPT_FAILED: the device key was replaced (another profile recovered after a wipe) since this blob was wrapped
+  it.each(['KEY_MISSING', 'KEY_INVALID', 'DECRYPT_FAILED'])('maps %s to DeviceKeyMissing', async (code) => {
     const p = fakePlugin();
     const k = await NativeDeviceKey.create(p);
     const w = await k.wrap(new Uint8Array([1, 2]));
@@ -31,7 +32,7 @@ describe('NativeDeviceKey', () => {
   it('passes other failures through', async () => {
     const p = fakePlugin();
     const k = await NativeDeviceKey.create(p);
-    p.fail = 'DECRYPT_FAILED';
+    p.fail = 'UNAVAILABLE';
     await expect(k.unwrap(new Uint8Array([1]))).rejects.not.toBeInstanceOf(DeviceKeyMissing);
   });
   it('is unavailable when the plugin says so', async () => {

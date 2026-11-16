@@ -1,6 +1,6 @@
 import type { Author, DocumentMeta, Id } from '@pnote/core/types';
 import { BackupCorrupt, BackupReader, BackupUnsupported, BackupWrongPassword, MIN_BACKUP_PASSWORD } from '@pnote/storage/backup';
-import { exportDocument, exportProfile, importDocuments, type ConflictChoice } from '@pnote/storage/backup-io';
+import { exportDocument, exportProfile, importDocuments, type ConflictChoice, type ImportResult } from '@pnote/storage/backup-io';
 import type { BlobSource, BlobStore } from '@pnote/storage/blob-store';
 import type { Library } from '@pnote/storage/library';
 import type { ProfileService, ProfileSummary } from '@pnote/storage/profiles';
@@ -40,20 +40,24 @@ export const exportAll = (lib: Library, blobs: BlobStore, pw: string, by: Author
   (sink: Parameters<typeof exportProfile>[2]) => exportProfile(lib, blobs, sink, pw, by, onProgress);
 
 export async function importBackup(lib: Library, blobs: BlobStore, file: Blob, pw: string, by: Author,
-  choose: (existing: DocumentMeta, incoming: { id: Id; title: string }) => Promise<ConflictChoice>): Promise<DocumentMeta[]> {
+  choose: (existing: DocumentMeta, incoming: { id: Id; title: string }) => Promise<ConflictChoice>): Promise<ImportResult> {
   const reader = await BackupReader.open(fileSource(file), pw);
   return importDocuments(lib, blobs, reader, by, choose);
 }
 
-/** Restore on a new device: the password is checked before any profile is created. */
+/** Restore on a new device: the password is checked before any profile is created, and a failed restore removes the new profile. */
 export async function restoreProfile(service: ProfileService, file: Blob, pw: string, name: string, secret: string, color: string):
-  Promise<{ profile: ProfileSummary; recoveryCode: string; imported: DocumentMeta[] }> {
+  Promise<{ profile: ProfileSummary; recoveryCode: string } & ImportResult> {
   const reader = await BackupReader.open(fileSource(file), pw);
   const { profile, recoveryCode } = await service.createFromBackup(name, secret, color);
-  const r = await service.unlock(profile.id, secret);
-  if (!r.ok) throw new Error('could not open the new profile');
-  const by: Author = { profileId: profile.id, name: profile.name };
-  const lib = new Lib(r.store, by);
-  const imported = await importDocuments(lib, new Blobs(r.store), reader, by, async () => 'copy');
-  return { profile, recoveryCode, imported };
+  try {
+    const r = await service.unlock(profile.id, secret);
+    if (!r.ok) throw new Error('could not open the new profile');
+    const by: Author = { profileId: profile.id, name: profile.name };
+    const out = await importDocuments(new Lib(r.store, by), new Blobs(r.store), reader, by, async () => 'copy');
+    return { profile, recoveryCode, ...out };
+  } catch (e) {
+    await service.discardNewProfile(profile.id).catch(() => {});
+    throw e;
+  }
 }

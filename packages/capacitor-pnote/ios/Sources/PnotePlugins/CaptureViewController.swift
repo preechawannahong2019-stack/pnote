@@ -67,8 +67,8 @@ final class CaptureViewController: UIViewController, WKNavigationDelegate {
     @objc private func save() {
         saveButton.isEnabled = false
         Task { @MainActor in
+            let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("capture-\(UUID().uuidString)", isDirectory: true)
             do {
-                let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("capture-\(UUID().uuidString)", isDirectory: true)
                 try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
                 let png = try await CaptureRender.screenshot(of: web)
                 try png.write(to: dir.appendingPathComponent("screenshot.png"))
@@ -79,6 +79,7 @@ final class CaptureViewController: UIViewController, WKNavigationDelegate {
                 finish(.success(Result(requestedUrl: url.absoluteString, finalUrl: web.url?.absoluteString ?? url.absoluteString, title: web.title ?? "",
                                        userAgent: ua, capturedAt: Date().timeIntervalSince1970 * 1000, timeZone: TimeZone.current.identifier, dir: dir)))
             } catch {
+                try? FileManager.default.removeItem(at: dir) // no partial capture left in the cache
                 finish(.failure(.loadFailed))
             }
         }

@@ -42,6 +42,7 @@ public class CaptureActivity extends Activity {
     private boolean loaded = false;
     private String requestedUrl;
     private File dir;
+    private boolean cleaned = false;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -89,6 +90,7 @@ public class CaptureActivity extends Activity {
         setContentView(root);
 
         main.postDelayed(() -> { if (!loaded) finishWith("TIMEOUT"); }, CaptureLimits.LOAD_TIMEOUT_MS);
+        cleanUp(requestedUrl); // also before loading: a session left by a capture whose process was killed is not reused
         web.loadUrl(requestedUrl);
     }
 
@@ -102,7 +104,7 @@ public class CaptureActivity extends Activity {
         final File pdf = new File(dir, "page.pdf");
         try {
             writeScreenshot(png);
-        } catch (Exception e) {
+        } catch (Throwable e) { // includes OutOfMemoryError
             finishWith("LOAD_FAILED");
             return;
         }
@@ -123,19 +125,25 @@ public class CaptureActivity extends Activity {
                 r.putExtra("archivePath", mht.getAbsolutePath().substring(base.length()));
                 setResult(RESULT_OK, r);
                 cleanUp(finalUrl);
+                cleaned = true;
                 finish();
             }));
         });
     }
 
-    /** Whole page (enableSlowWholeDocumentDraw), capped at 16,384 px tall so the bitmap stays bounded (≤ ~70 MB at 1080 px wide). */
+    /**
+     * Whole page (enableSlowWholeDocumentDraw), capped at 16,384 px tall and scaled down to at most
+     * CaptureLimits.MAX_PIXELS as RGB_565, so the one bitmap PNG encoding needs stays around 32 MB at most.
+     */
     private void writeScreenshot(File out) throws Exception {
         int width = web.getWidth();
         int contentHeight = (int) Math.ceil(web.getContentHeight() * getResources().getDisplayMetrics().density);
         int height = CaptureLimits.clampHeight(contentHeight);
-        Bitmap bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        double scale = CaptureLimits.outputScale(width, height);
+        Bitmap bmp = Bitmap.createBitmap((int) Math.ceil(width * scale), (int) Math.ceil(height * scale), Bitmap.Config.RGB_565);
         Canvas canvas = new Canvas(bmp);
         canvas.drawColor(Color.WHITE);
+        canvas.scale((float) scale, (float) scale);
         canvas.translate(-web.getScrollX(), -web.getScrollY()); // draw() paints relative to the current scroll position
         web.draw(canvas);
         try (FileOutputStream fos = new FileOutputStream(out)) { bmp.compress(Bitmap.CompressFormat.PNG, 100, fos); }
@@ -159,6 +167,7 @@ public class CaptureActivity extends Activity {
         r.putExtra(RESULT_ERROR, code);
         setResult(RESULT_CANCELED, r);
         cleanUp(web == null ? requestedUrl : web.getUrl());
+        cleaned = true;
         deleteRecursive(dir);
         finish();
     }
@@ -177,6 +186,7 @@ public class CaptureActivity extends Activity {
     @Override
     protected void onDestroy() {
         main.removeCallbacksAndMessages(null);
+        if (web != null && !cleaned) { cleanUp(web.getUrl()); deleteRecursive(dir); } // closed by the system
         if (web != null) web.destroy();
         super.onDestroy();
     }

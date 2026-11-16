@@ -18,6 +18,8 @@ export interface BackupManifest {
   documents: { id: Id; title: string; files: { path: string; sha256: string; bytes: number }[] }[];
 }
 export type ConflictChoice = 'copy' | 'replace';
+/** `skipped`: titles of documents that failed the integrity check and were not imported. */
+export interface ImportResult { imported: DocumentMeta[]; skipped: string[] }
 const APP_VERSION = '0.3.0';
 const enc = (v: unknown) => new TextEncoder().encode(JSON.stringify(v));
 
@@ -69,7 +71,7 @@ export async function exportProfile(lib: Library, blobs: BlobStore, sink: Backup
   try {
     await w.addFile('profile/folders.json', enc(await lib.listFolders()));
     await w.addFile('profile/presets.json', enc(await lib.listPresets()));
-    const docs = await lib.allDocuments();
+    const docs = await lib.allDocumentsIncludingReplaced(); // replaced (hidden) documents are evidence too
     const out: BackupManifest['documents'] = [];
     for (let i = 0; i < docs.length; i++) {
       out.push(await writeDocument(lib, blobs, w, docs[i]));
@@ -104,7 +106,7 @@ function collect(onDone: (b: Uint8Array) => Promise<void>): EntrySink {
  * 'replace' hides the existing one (its files stay). The incoming copy takes a new id only when there is a conflict.
  */
 export async function importDocuments(lib: Library, blobs: BlobStore, reader: BackupReader, by: Author,
-  choose: (existing: DocumentMeta, incoming: { id: Id; title: string }) => Promise<ConflictChoice>): Promise<DocumentMeta[]> {
+  choose: (existing: DocumentMeta, incoming: { id: Id; title: string }) => Promise<ConflictChoice>): Promise<ImportResult> {
   const store = lib.backupAccess();
   const docs = new Map<string, Pending>();
   let manifest: BackupManifest | null = null;
@@ -114,6 +116,7 @@ export async function importDocuments(lib: Library, blobs: BlobStore, reader: Ba
   const json = <T>(b: Uint8Array) => JSON.parse(new TextDecoder().decode(b)) as T;
 
   const decide = async (d: Pending, meta: DocumentMeta) => {
+    if (meta.replacedBy) { d.target = (await store.getJSON(`documents/${meta.id}/meta.json`)) ? newId() : meta.id; return; } // hidden in the backup: never a conflict
     const all = await lib.allDocuments();
     const existing = all.find((x) => x.id === meta.id || x.originId === meta.id || (meta.originId && (x.id === meta.originId || x.originId === meta.originId)));
     const onDisk = await store.getJSON(`documents/${meta.id}/meta.json`);
@@ -173,24 +176,29 @@ export async function importDocuments(lib: Library, blobs: BlobStore, reader: Ba
   }
   const folderIds = new Set((await lib.listFolders()).map((f) => f.id));
   const imported: DocumentMeta[] = [];
+  const skipped: string[] = [];
+  const listed = new Set((manifest as BackupManifest).documents.map((e) => e.id));
+  for (const [srcId, d] of docs) if (!listed.has(srcId) && d.target) await lib.removeDocumentFiles(d.target); // not in the manifest
+  const targetOf = (srcId?: Id) => (srcId ? docs.get(srcId)?.target ?? srcId : undefined);
   for (const entry of (manifest as BackupManifest).documents) {
     const d = docs.get(entry.id);
-    if (!d?.meta || !d.target) continue;
+    if (!d?.meta || !d.target) { skipped.push(entry.title); if (d?.target) await lib.removeDocumentFiles(d.target); continue; }
     const ok = !!d.audit && entry.files.every((f) => {
       const got = d.written.get(f.path);
       return got && got.sha256 === f.sha256 && got.bytes === f.bytes;
     });
-    if (!ok) { await lib.removeDocumentFiles(d.target); continue; }
+    if (!ok) { await lib.removeDocumentFiles(d.target); skipped.push(entry.title); continue; }
     const t = Date.now();
     const audit = await appendAudit(d.audit!, { time: t, author: by, action: 'doc.import', objectIds: [d.target] });
     const meta: DocumentMeta = {
       ...d.meta, id: d.target, profileId: lib.profileId, folderId: d.meta.folderId && folderIds.has(d.meta.folderId) ? d.meta.folderId : null,
-      originId: d.target !== d.meta.id ? d.meta.id : d.meta.originId, replacedBy: undefined, updatedAt: t,
+      originId: d.target !== d.meta.id ? d.meta.id : d.meta.originId, replacedBy: targetOf(d.meta.replacedBy), updatedAt: t,
     };
     await store.putJSON(`documents/${d.target}/audit.json`, audit);
-    await lib.publishImported(meta);
+    if (meta.replacedBy) await lib.publishImportedHidden(meta);
+    else await lib.publishImported(meta);
     if (d.replace) await lib.hideReplaced(d.replace, d.target);
     imported.push(meta);
   }
-  return imported;
+  return { imported, skipped };
 }

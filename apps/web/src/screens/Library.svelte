@@ -102,9 +102,11 @@
   let newTemplate = $state<PageTemplate>('plain');
   let error = $state('');
 
+  let replaced = $state<DocumentMeta[]>([]);
   async function refresh() {
     folders = await lib.listFolders();
     docs = query.trim() ? await lib.searchByTitle(query) : await lib.listDocuments(folderId);
+    replaced = await lib.listReplaced();
   }
   $effect(() => { void folderId; void query; void openDoc; refresh(); });
 
@@ -155,7 +157,9 @@
 {/if}
 {#if restoring}
   <RestoreDialog file={restoring} run={(pw, choose) => importBackup(lib, blobs, restoring!, pw, author, choose)}
-    onDone={async (out) => { restoring = null; await refresh(); error = out.length ? '' : 'ไม่มีเอกสารที่นำเข้าได้'; }} onCancel={() => (restoring = null)} />
+    onDone={async (out) => { restoring = null; await refresh();
+      error = out.skipped.length ? `นำเข้าไม่ได้ ${out.skipped.length} เอกสาร เพราะข้อมูลไม่ตรงกับไฟล์สำรอง: ${out.skipped.join(', ')}`
+        : out.imported.length ? '' : 'ไม่มีเอกสารที่นำเข้าได้'; }} onCancel={() => (restoring = null)} />
 {/if}
 <input bind:this={pnoteInput} type="file" hidden accept=".pnote,application/x-pnote-backup" data-testid="pnote-input"
   onchange={(e) => { const f = (e.currentTarget as HTMLInputElement).files?.[0]; (e.currentTarget as HTMLInputElement).value = ''; if (f) restoring = f; }} />
@@ -213,6 +217,14 @@
         </div>
       {/each}
       {#if !childFolders.length && !docs.length}<p class="empty">ยังไม่มีเอกสาร</p>{/if}
+      {#if replaced.length && !query.trim() && folderId === null}
+        <details class="replaced">
+          <summary>ฉบับเดิมที่ถูกแทนที่ ({replaced.length})</summary>
+          {#each replaced as d (d.id)}
+            <button class="small" aria-label="เปิดฉบับเดิม {d.title}" onclick={() => (openDoc = d.id)}>{d.title}</button>
+          {/each}
+        </details>
+      {/if}
     </section>
   </div>
 

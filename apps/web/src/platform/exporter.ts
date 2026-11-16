@@ -15,12 +15,30 @@ const isCancel = (e: unknown) => {
 };
 
 /** Browser: download link, or the Web Share API where it can share files. */
-function collector() {
-  const parts: Uint8Array[] = [];
+/**
+ * Collects a streamed export into a Blob, folding the pending byte arrays into the Blob every `foldAt` bytes so the
+ * JS heap holds at most that much (browsers may keep large Blobs on disk).
+ */
+export function blobCollector(foldAt = 16 << 20) {
+  let parts: BlobPart[] = [];
+  let pending: Uint8Array[] = [];
+  let held = 0;
   let aborted = false;
-  const sink: StreamSink = { write: async (b) => { parts.push(b.slice()); }, close: async () => {}, abort: async () => { aborted = true; parts.length = 0; } };
-  return { sink, parts, get aborted() { return aborted; } };
+  const fold = () => { if (pending.length) { parts = [new Blob([...parts, ...(pending as Uint8Array<ArrayBuffer>[])])]; pending = []; held = 0; } };
+  const sink: StreamSink = {
+    write: async (b) => { pending.push(b.slice()); held += b.length; if (held >= foldAt) fold(); },
+    close: async () => {},
+    abort: async () => { aborted = true; parts = []; pending = []; held = 0; },
+  };
+  return {
+    sink,
+    get heldBytes() { return held; },
+    get aborted() { return aborted; },
+    blob(type: string) { fold(); return new Blob(parts, { type }); },
+  };
 }
+
+type SavePicker = (o: { suggestedName: string }) => Promise<{ createWritable(): Promise<{ write(b: Uint8Array): Promise<void>; close(): Promise<void>; abort(): Promise<void> }> }>;
 
 export function webExporter(): FileExporter {
   const probe = typeof navigator !== 'undefined' && !!navigator.canShare?.({ files: [new File([], 'x.pdf', { type: 'application/pdf' })] });
@@ -40,20 +58,34 @@ export function webExporter(): FileExporter {
       }
     },
     async saveStream(name, mime, write) {
-      const c = collector(); // the browser may page a large Blob to disk
+      const picker = (globalThis as { showSaveFilePicker?: SavePicker }).showSaveFilePicker;
+      if (picker) { // straight to disk (Chromium desktop)
+        let handle;
+        try { handle = await picker({ suggestedName: safeName(name) }); } catch (e) { if (isCancel(e)) return; throw e; }
+        const out = await handle.createWritable();
+        try {
+          await write({ write: (b) => out.write(b), close: async () => {}, abort: async () => {} });
+          await out.close();
+        } catch (e) {
+          await out.abort().catch(() => {});
+          throw e;
+        }
+        return;
+      }
+      const c = blobCollector();
       await write(c.sink);
       if (c.aborted) return;
-      const url = URL.createObjectURL(new Blob(c.parts as Uint8Array<ArrayBuffer>[], { type: mime }));
+      const url = URL.createObjectURL(c.blob(mime));
       const a = Object.assign(document.createElement('a'), { href: url, download: safeName(name) });
       document.body.append(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 10_000);
     },
     async shareStream(name, mime, write) {
-      const c = collector();
+      const c = blobCollector();
       await write(c.sink);
       if (c.aborted) return;
       try {
-        await navigator.share({ files: [new File(c.parts as Uint8Array<ArrayBuffer>[], safeName(name), { type: mime })], title: name });
+        await navigator.share({ files: [new File([c.blob(mime)], safeName(name), { type: mime })], title: name });
       } catch (e) {
         if (!isCancel(e)) throw e;
       }

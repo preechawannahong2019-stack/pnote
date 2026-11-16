@@ -48,7 +48,12 @@ public enum CaptureRender {
         let savedInsets = scroll.contentInsetAdjustmentBehavior
         scroll.contentInsetAdjustmentBehavior = .never
         defer { scroll.contentInsetAdjustmentBehavior = savedInsets; scroll.contentOffset = savedOffset }
-        var tiles: [(CGFloat, CGFloat, UIImage)] = []
+        // each piece is drawn into one scale-1 bitmap as soon as it arrives, so at most one viewport is held besides it
+        guard let ctx = CGContext(data: nil, width: Int(width.rounded(.up)), height: Int(height.rounded(.up)), bitsPerComponent: 8,
+                                  bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+        else { throw NSError(domain: "PnoteCapture", code: 2) }
+        ctx.setFillColor(UIColor.white.cgColor)
+        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
         var y: CGFloat = 0
         while y < height {
             let h = min(viewport, height - y)
@@ -56,17 +61,14 @@ public enum CaptureRender {
             let shown = scroll.contentOffset.y // the last piece may sit higher than y when the page ends
             let cfg = WKSnapshotConfiguration()
             cfg.rect = CGRect(x: 0, y: y - shown, width: width, height: h) // view coordinates
+            cfg.snapshotWidth = NSNumber(value: Double(width)) // scale 1, not the screen's 2-3x
             cfg.afterScreenUpdates = true
-            tiles.append((y, h, try await web.takeSnapshot(configuration: cfg)))
+            let piece = try await web.takeSnapshot(configuration: cfg)
+            if let cg = piece.cgImage { ctx.draw(cg, in: CGRect(x: 0, y: height - y - h, width: width, height: h)) } // CG origin is bottom-left
             y += h
         }
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        let image = UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format).image { ctx in
-            UIColor.white.setFill()
-            ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
-            for (top, h, img) in tiles { img.draw(in: CGRect(x: 0, y: top, width: width, height: h)) }
-        }
+        guard let stitched = ctx.makeImage() else { throw NSError(domain: "PnoteCapture", code: 3) }
+        let image = UIImage(cgImage: stitched)
         guard let png = image.pngData() else { throw NSError(domain: "PnoteCapture", code: 1) }
         return png
     }

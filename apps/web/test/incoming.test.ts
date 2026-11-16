@@ -69,3 +69,22 @@ describe('IncomingPrompt', () => {
     expect(f.removed.sort()).toEqual(['in/a.pdf', 'in/b.png']);
   });
 });
+
+describe('reading a shared file from the cache', async () => {
+  const { cacheBlobReader } = await import('../src/platform/incoming');
+  it('streams it through the web view as a Blob instead of one base64 string', async () => {
+    const fetched: string[] = [];
+    const read = cacheBlobReader({
+      getUri: async (path) => `file:///data/cache/${path}`,
+      convertFileSrc: (uri) => uri.replace('file://', 'https://localhost/_capacitor_file_'),
+      fetch: async (url) => { fetched.push(url); return new Response('%PDF-'); },
+    });
+    const b = await read('incoming/u1/a.pdf');
+    expect(fetched).toEqual(['https://localhost/_capacitor_file_/data/cache/incoming/u1/a.pdf']);
+    expect(await b.text()).toBe('%PDF-');
+  });
+  it('fails loudly when the file cannot be read', async () => {
+    const read = cacheBlobReader({ getUri: async (p) => p, convertFileSrc: (u) => u, fetch: async () => new Response('', { status: 404 }) });
+    await expect(read('x')).rejects.toThrow('404');
+  });
+});

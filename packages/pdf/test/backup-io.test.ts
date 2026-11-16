@@ -65,7 +65,7 @@ describe('document .pnote', () => {
     expect(new TextDecoder('latin1').decode(file)).not.toContain('ลับมาก');
 
     const b = await profile(bob);
-    const [got] = await importDocuments(b.lib, b.blobs, await BackupReader.open(src(file), PW), bob, async () => 'copy');
+    const { imported: [got] } = await importDocuments(b.lib, b.blobs, await BackupReader.open(src(file), PW), bob, async () => 'copy');
     expect(got.id).toBe(meta.id); // no conflict: the id is kept
     const opened = await b.lib.openDocument(got.id);
     expect(opened.state.strokes[meta.pages[0].id].map((s) => s.id)).toEqual(['s1']);
@@ -83,17 +83,35 @@ describe('document .pnote', () => {
     const file = await backupOf(a, meta.id);
     const b = await profile(bob);
     await importDocuments(b.lib, b.blobs, await BackupReader.open(src(file), PW), bob, async () => 'copy');
-    const [copy] = await importDocuments(b.lib, b.blobs, await BackupReader.open(src(file), PW), bob, async () => 'copy');
+    const { imported: [copy] } = await importDocuments(b.lib, b.blobs, await BackupReader.open(src(file), PW), bob, async () => 'copy');
     expect(copy.id).not.toBe(meta.id);
     expect(copy.originId).toBe(meta.id);
     expect((await b.lib.listDocuments(null)).length).toBe(2);
     const seen: string[] = [];
-    const [rep] = await importDocuments(b.lib, b.blobs, await BackupReader.open(src(file), PW), bob, async (existing) => { seen.push(existing.id); return 'replace'; });
+    const { imported: [rep] } = await importDocuments(b.lib, b.blobs, await BackupReader.open(src(file), PW), bob, async (existing) => { seen.push(existing.id); return 'replace'; });
     expect(seen).toEqual([meta.id]); // conflicts are found by id or origin id; the first match is asked about
     const listed = (await b.lib.listDocuments(null)).map((d) => d.id);
     expect(listed).toContain(rep.id);
     expect(listed).not.toContain(meta.id);
     expect((await b.lib.openDocument(meta.id)).meta.replacedBy).toBe(rep.id); // still on disk
+    expect((await b.lib.listReplaced()).map((d) => d.id)).toEqual([meta.id]); // and reachable
+    const old = await b.lib.openDocument(meta.id);
+    expect(old.audit.at(-1)).toMatchObject({ action: 'doc.replace', objectIds: [meta.id, rep.id] });
+    expect(old.auditOk).toBe(true);
+  });
+
+  it('a profile backup carries replaced documents and restores them still hidden', async () => {
+    const a = await profile(alice);
+    const meta = await annotatedPdf(a);
+    const file = await backupOf(a, meta.id);
+    const { imported: [rep] } = await importDocuments(a.lib, a.blobs, await BackupReader.open(src(file), PW), alice, async () => 'replace');
+    const sink = memSink();
+    await exportProfile(a.lib, a.blobs, sink, PW, alice);
+    const b = await profile(bob);
+    const got = await importDocuments(b.lib, b.blobs, await BackupReader.open(src(sink.bytes()), PW), bob, async () => 'copy');
+    expect(got.imported.map((d) => d.id).sort()).toEqual([meta.id, rep.id].sort());
+    expect((await b.lib.listDocuments(null)).map((d) => d.id)).toEqual([rep.id]);
+    expect((await b.lib.listReplaced()).map((d) => [d.id, d.replacedBy])).toEqual([[meta.id, rep.id]]);
   });
 
   it('a file whose content does not match its manifest is not imported and leaves nothing behind', async () => {
@@ -103,7 +121,8 @@ describe('document .pnote', () => {
     await exportDocument(a.lib, a.blobs, meta.id, sink, PW, alice, { __corruptForTest: 'pages' });
     const b = await profile(bob);
     const got = await importDocuments(b.lib, b.blobs, await BackupReader.open(src(sink.bytes()), PW), bob, async () => 'copy');
-    expect(got).toEqual([]);
+    expect(got.imported).toEqual([]);
+    expect(got.skipped).toEqual([meta.title]); // reported, not silently dropped
     expect(await b.lib.listDocuments(null)).toEqual([]);
     expect(await b.store.list('documents/')).toEqual([]);
   });
@@ -122,7 +141,7 @@ describe('profile .pnote', () => {
     expect(r.header.kind).toBe('profile');
     const b = await profile(bob);
     const got = await importDocuments(b.lib, b.blobs, r, bob, async () => 'copy');
-    expect(got.map((d) => d.id).sort()).toEqual([nb.id, pdf.id].sort());
+    expect(got.imported.map((d) => d.id).sort()).toEqual([nb.id, pdf.id].sort());
     expect((await b.lib.listFolders()).map((x) => x.name)).toEqual(['คดี']);
     expect((await b.lib.listDocuments(f.id)).map((d) => d.title)).toEqual(['บันทึก']);
     expect((await b.lib.listPresets()).map((p) => p.name)).toEqual(['แดง']);

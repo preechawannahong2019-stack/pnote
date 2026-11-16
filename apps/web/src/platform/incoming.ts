@@ -47,3 +47,14 @@ export class IncomingFiles {
 
 /** The web build receives no files from other apps. */
 export const noIncoming: IncomingSource = { onFile: () => () => {}, read: async () => new Blob(), remove: async () => {} };
+
+/** Reads a file in the app cache through the web view's file server: a Blob, never one base64 string of the whole file. */
+export function cacheBlobReader(d: {
+  getUri(path: string): Promise<string>; convertFileSrc(uri: string): string; fetch(url: string): Promise<Response>;
+}): (path: string) => Promise<Blob> {
+  return async (path) => {
+    const res = await d.fetch(d.convertFileSrc(await d.getUri(path)));
+    if (!res.ok) throw new Error(`could not read ${path}: ${res.status}`);
+    return res.blob();
+  };
+}

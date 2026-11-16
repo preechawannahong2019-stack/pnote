@@ -69,6 +69,16 @@ describe('PIN screens on native', () => {
     expect(screen.getByTestId('pin-dots').querySelectorAll('.filled')).toHaveLength(0);
   });
 
+  it('unlock shows an error instead of hanging when the device layer fails unexpectedly', async () => {
+    const d = device();
+    const service = new ProfileService(new MemoryAdapter(), d);
+    const { profile } = await service.create('A', '123456', '#000');
+    d.unwrap = async () => { throw new Error('UNAVAILABLE'); };
+    render(Unlock, { service, profile, pin: true, onUnlocked: () => {}, onRecover: () => {}, onBack: () => {} });
+    await tap('123456');
+    expect(await screen.findByText('เปิดโปรไฟล์ไม่สำเร็จ ลองอีกครั้ง หรือใช้รหัสกู้คืน')).toBeInTheDocument();
+  });
+
   it('unlock shows the device-key-missing message with a recovery button', async () => {
     const d = device();
     const service = new ProfileService(new MemoryAdapter(), d);

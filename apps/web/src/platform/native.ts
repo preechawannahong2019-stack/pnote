@@ -1,7 +1,8 @@
 import { App as CapApp } from '@capacitor/app';
 import { Directory, Filesystem } from '@capacitor/filesystem';
 import { PnoteCapture, PnoteIncoming, PnoteSecure } from '@pnote/capacitor-pnote';
-import { IncomingFiles } from './incoming';
+import { Capacitor } from '@capacitor/core';
+import { cacheBlobReader, IncomingFiles } from './incoming';
 import { Share } from '@capacitor/share';
 import { nativeExporter } from './exporter';
 import { nativeCapture } from './capture';
@@ -26,7 +27,11 @@ export async function createNativeServices(kind: Exclude<PlatformKind, 'web'>): 
     capture: nativeCapture(PnoteCapture, cacheFiles),
     incoming: new IncomingFiles({
       onFile: (cb) => { const h = PnoteIncoming.addListener('file', cb); return () => { void h.then((x) => x.remove()); }; },
-      read: async (path) => new Blob([(await cacheFiles.read(path)) as Uint8Array<ArrayBuffer>]),
+      read: cacheBlobReader({
+        getUri: async (path) => (await Filesystem.getUri({ path, directory: Directory.Cache })).uri,
+        convertFileSrc: (uri) => Capacitor.convertFileSrc(uri),
+        fetch: (url) => fetch(url),
+      }),
       remove: cacheFiles.remove,
     }),
     exporter: nativeExporter({

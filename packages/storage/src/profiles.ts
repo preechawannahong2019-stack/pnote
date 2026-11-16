@@ -117,6 +117,12 @@ export class ProfileService {
     return this.create(name, secret, avatarColor);
   }
 
+  /** Undo createFromBackup() when the restore fails: removes the new profile's record and every file it wrote. */
+  async discardNewProfile(id: Id): Promise<void> {
+    for (const p of await this.adapter.list(`/${id}/`)) await this.adapter.delete(p);
+    await this.adapter.delete(recordPath(id));
+  }
+
   unlock(id: Id, secret: string): Promise<UnlockResult> {
     return this.exclusive(id, async () => {
       const rec = await this.read(id);

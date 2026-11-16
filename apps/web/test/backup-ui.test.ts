@@ -69,6 +69,14 @@ describe('incoming .pnote files', () => {
 });
 
 describe('restore a profile from a backup', async () => {
+  it('leaves no profile behind when the backup turns out to be damaged', async () => {
+    const good = new Uint8Array(await (await makeBackup()).arrayBuffer());
+    const cut = new Blob([good.slice(0, good.length - 40)]); // header and password check still pass
+    const svc = new ProfileService(new MemoryAdapter(), WebNoDeviceKey);
+    await expect(restoreProfile(svc, cut, 'backup-pass-1', 'บ๊อบ', 'password2', '#0f0')).rejects.toBeInstanceOf(BackupCorrupt);
+    expect(await svc.list()).toEqual([]);
+  });
+
   const { MemoryAdapter } = await import('@pnote/storage/adapter');
   const { WebNoDeviceKey } = await import('@pnote/storage/device-key');
   const { ProfileService } = await import('@pnote/storage/profiles');
@@ -76,7 +84,7 @@ describe('restore a profile from a backup', async () => {
   const { BlobStore } = await import('@pnote/storage/blob-store');
   const { exportProfile } = await import('@pnote/storage/backup-io');
   const { restoreProfile } = await import('../src/lib/backup-flow');
-  const { BackupWrongPassword } = await import('@pnote/storage/backup');
+  const { BackupWrongPassword, BackupCorrupt } = await import('@pnote/storage/backup');
 
   async function makeBackup() {
     const svc = new ProfileService(new MemoryAdapter(), WebNoDeviceKey);
@@ -99,8 +107,47 @@ describe('restore a profile from a backup', async () => {
     const out = await restoreProfile(svc, file, 'backup-pass-1', 'บ๊อบ', 'password2', '#0f0');
     expect(out.recoveryCode).toBeTruthy();
     expect(out.imported.map((d) => d.title)).toEqual(['สมุดคดี']);
+    expect(out.skipped).toEqual([]);
     const r = await svc.unlock(out.profile.id, 'password2');
     if (!r.ok) throw new Error();
     expect((await new Library(r.store, { profileId: out.profile.id, name: 'บ๊อบ' }).listDocuments(null)).map((d) => d.title)).toEqual(['สมุดคดี']);
+  });
+});
+
+describe('web streaming export', async () => {
+  const { blobCollector } = await import('../src/platform/exporter');
+  it('folds written chunks into a Blob as it goes instead of keeping them all as arrays', async () => {
+    const c = blobCollector(4 << 20);
+    const chunk = new Uint8Array(1 << 20).fill(7);
+    for (let i = 0; i < 10; i++) await c.sink.write(chunk);
+    expect(c.heldBytes).toBeLessThanOrEqual(4 << 20);
+    const b = c.blob('application/octet-stream');
+    expect(b.size).toBe(10 << 20);
+    expect(new Uint8Array(await b.slice((10 << 20) - 1).arrayBuffer())).toEqual(new Uint8Array([7]));
+  });
+});
+
+describe('web save straight to disk', async () => {
+  const { webExporter } = await import('../src/platform/exporter');
+  afterEach(() => { delete (globalThis as { showSaveFilePicker?: unknown }).showSaveFilePicker; });
+  function picker() {
+    const got: number[] = [];
+    const state = { closed: false, aborted: false, name: '' };
+    (globalThis as { showSaveFilePicker?: unknown }).showSaveFilePicker = async (o: { suggestedName: string }) => {
+      state.name = o.suggestedName;
+      return { createWritable: async () => ({ write: async (b: Uint8Array) => { got.push(...b); }, close: async () => { state.closed = true; }, abort: async () => { state.aborted = true; } }) };
+    };
+    return { got, state };
+  }
+  it('writes the stream into the chosen file', async () => {
+    const p = picker();
+    await webExporter().saveStream('a.pnote', 'application/x-pnote-backup', async (s) => { await s.write(new Uint8Array([1, 2])); await s.close(); });
+    expect(p.got).toEqual([1, 2]);
+    expect(p.state).toMatchObject({ closed: true, aborted: false, name: 'a.pnote' });
+  });
+  it('aborts the file when writing fails', async () => {
+    const p = picker();
+    await expect(webExporter().saveStream('a.pnote', 'x', async () => { throw new Error('disk'); })).rejects.toThrow('disk');
+    expect(p.state).toMatchObject({ closed: false, aborted: true });
   });
 });

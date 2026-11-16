@@ -29,7 +29,8 @@ export class NativeDeviceKey implements DeviceKeyProvider {
       return unb64((await this.plugin.unwrap({ data: b64(b) })).data);
     } catch (e) {
       const code = (e as { code?: string }).code;
-      if (code === 'KEY_MISSING' || code === 'KEY_INVALID') throw new DeviceKeyMissing();
+      // DECRYPT_FAILED here means the device key was replaced since this blob was wrapped (a recovery or new profile after a wipe)
+      if (code === 'KEY_MISSING' || code === 'KEY_INVALID' || code === 'DECRYPT_FAILED') throw new DeviceKeyMissing();
       throw e;
     }
   }

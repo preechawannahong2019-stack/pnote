@@ -26,6 +26,10 @@
       else if (r.reason === 'delayed') message = `ใส่รหัสผิดหลายครั้ง ลองใหม่ได้ใน ${Math.ceil(r.retryAfterMs / 1000)} วินาที`;
       else if (r.reason === 'device-key-missing') keyMissing = true;
       else locked = true;
+    } catch {
+      secret = '';
+      reset++;
+      message = 'เปิดโปรไฟล์ไม่สำเร็จ ลองอีกครั้ง หรือใช้รหัสกู้คืน';
     } finally {
       busy = false;
     }

@@ -4,6 +4,8 @@ import { createProfileAndUnlock, darkPixels, newNotebook, PW } from './helpers';
 const BACKUP_PW = 'backup-password-1';
 
 test('a notebook exported as .pnote restores into a new profile in a fresh browser', async ({ page, browser }) => {
+  // the download fallback; the direct-to-disk save picker path is unit-tested (it opens an OS dialog)
+  await page.addInitScript(() => { delete (window as { showSaveFilePicker?: unknown }).showSaveFilePicker; });
   await createProfileAndUnlock(page, 'ต้นทาง');
   await newNotebook(page, 'backup-notebook');
   const box = (await page.getByTestId('canvas-host').boundingBox())!;
