@@ -2,7 +2,7 @@ import { appendAudit, verifyAudit, type AuditEntry } from '@pnote/core/audit';
 import type { DocState } from '@pnote/core/doc-state';
 import { newId } from '@pnote/core/ids';
 import { decodePage, encodePage } from '@pnote/core/serialize';
-import { A4, type Author, type DocumentMeta, type Folder, type Id, type OcrPage, type PageRef, type PageTemplate, type PenPreset } from '@pnote/core/types';
+import { A4, type Author, type DocumentMeta, type Folder, type Id, type OcrPage, type PageRef, type PageTemplate, type PenPreset, type CaptureRecord } from '@pnote/core/types';
 import type { EncryptedStore } from './encrypted-store';
 
 export class FolderNotEmptyError extends Error {
@@ -107,6 +107,14 @@ export class Library {
     return removed;
   }
 
+  getCaptureRecord(docId: Id): Promise<CaptureRecord | null> {
+    return this.store.getJSON<CaptureRecord>(`${docDir(docId)}/capture.json`);
+  }
+
+  putCaptureRecord(docId: Id, rec: CaptureRecord): Promise<void> {
+    return this.store.putJSON(`${docDir(docId)}/capture.json`, rec);
+  }
+
   getTextLayer(docId: Id, pageId: Id): Promise<OcrPage | null> {
     return this.store.getJSON<OcrPage>(`${docDir(docId)}/text/${pageId}.json`);
   }
@@ -143,6 +151,57 @@ export class Library {
       const hasChildren = folders.some((f) => f.parentId === id) || (await this.index()).some((d) => d.folderId === id);
       if (hasChildren) throw new FolderNotEmptyError();
       await this.store.putJSON(FOLDERS, folders.filter((f) => f.id !== id));
+    });
+  }
+
+  /** Every document in the library index (all folders). */
+  async allDocuments(): Promise<DocumentMeta[]> { return this.index(); }
+
+  /** Every document with a meta.json, including ones hidden because an imported copy replaced them. */
+  async allDocumentsIncludingReplaced(): Promise<DocumentMeta[]> {
+    const out: DocumentMeta[] = [];
+    for (const p of await this.store.list('documents/')) {
+      if (!/^documents\/[^/]+\/meta\.json$/.test(p)) continue;
+      const m = await this.store.getJSON<DocumentMeta>(p);
+      if (m) out.push(m);
+    }
+    return out.sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  /** Documents hidden by a replacing import: kept on disk, listed here so they can still be opened. */
+  async listReplaced(): Promise<DocumentMeta[]> {
+    return (await this.allDocumentsIncludingReplaced()).filter((d) => d.replacedBy);
+  }
+
+  /** Write the meta of an imported document that was already hidden (replaced) in the backup: not added to the index. */
+  async publishImportedHidden(meta: DocumentMeta): Promise<void> {
+    await this.store.putJSON(`${docDir(meta.id)}/meta.json`, meta);
+  }
+
+  /** Raw access to the profile's encrypted files, for .pnote backup and restore only. */
+  backupAccess(): EncryptedStore { return this.store; }
+
+  /** Write an imported document's meta last (makes it visible), under the library lock. */
+  async publishImported(meta: DocumentMeta): Promise<void> { await this.locked(() => this.putMeta(meta)); }
+
+  /** Hide a document replaced by an imported copy: removed from the index, files and meta kept. */
+  async hideReplaced(id: Id, by: Id): Promise<void> {
+    await this.locked(async () => {
+      const meta = await this.getMeta(id);
+      const audit = (await this.store.getJSON<AuditEntry[]>(`${docDir(id)}/audit.json`)) ?? [];
+      await this.store.putJSON(`${docDir(id)}/audit.json`,
+        await appendAudit(audit, { time: Date.now(), author: this.author, action: 'doc.replace', objectIds: [id, by] }));
+      await this.store.putJSON(`${docDir(id)}/meta.json`, { ...meta, replacedBy: by });
+      await this.store.putJSON(INDEX, (await this.index()).filter((d) => d.id !== id));
+    });
+  }
+
+  /** Add folders that do not exist yet (by id). */
+  async mergeFolders(incoming: Folder[]): Promise<void> {
+    await this.locked(async () => {
+      const have = await this.folders();
+      const ids = new Set(have.map((f) => f.id));
+      await this.store.putJSON(FOLDERS, [...have, ...incoming.filter((f) => !ids.has(f.id)).map((f) => ({ ...f, profileId: this.store.profileId }))]);
     });
   }
 

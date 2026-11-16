@@ -93,6 +93,7 @@ export async function buildExport(lib: Library, blobs: BlobStore, docId: Id, by:
   const textLayers: Record<Id, OcrPage> = {};
   if (opts.includeTextLayer) for (const p of meta.pages) { const l = await lib.getTextLayer(meta.id, p.id); if (l) textLayers[p.id] = l; }
   const sourceIntact = await sourceIntegrity(meta, manifest, () => blobs.verify(rel));
-  const bytes = await exportPdf({ meta, state, audit, source, images, textLayers, sourceIntact, exportedAt: Date.now(), exportedBy: by, fonts: await loadExportFonts() }, opts);
+  const capture = meta.kind === 'web' ? await lib.getCaptureRecord(meta.id) : null;
+  const bytes = await exportPdf({ meta, state, audit, source, capture, images, textLayers, sourceIntact, exportedAt: Date.now(), exportedBy: by, fonts: await loadExportFonts() }, opts);
   return { bytes, name: exportFileName(meta.title) };
 }

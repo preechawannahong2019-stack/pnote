@@ -4,7 +4,7 @@ import type { Author, Id } from './types';
 export type AuditAction =
   | 'doc.create' | 'stroke.add' | 'stroke.hide' | 'stroke.unhide' | 'objects.move'
   | 'shape.add' | 'shape.hide' | 'shape.unhide' | 'page.add' | 'page.remove' | 'page.reorder'
-  | 'preset.save' | 'doc.import' | 'text.add' | 'text.edit' | 'text.hide' | 'text.unhide';
+  | 'preset.save' | 'doc.import' | 'doc.replace' | 'text.add' | 'text.edit' | 'text.hide' | 'text.unhide';
 
 export interface AuditEntry {
   seq: number;

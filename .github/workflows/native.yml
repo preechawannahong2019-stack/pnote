@@ -1,0 +1,87 @@
+name: native
+
+on:
+  push:
+    branches: [main, 'stage*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm run check:no-external
+      - run: npm run e2e # uses the runner's /usr/bin/google-chrome
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with: { name: playwright-results, path: apps/web/test-results, if-no-files-found: ignore }
+
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21, cache: gradle }
+      - uses: android-actions/setup-android@v3
+        with: { packages: 'platform-tools' } # the default 'tools' package no longer exists
+      - run: npm ci
+      - run: npm run build:mobile
+      - name: Unit tests and debug APK
+        working-directory: apps/mobile/android
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - name: Instrumented tests (API 34 emulator)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          working-directory: apps/mobile/android
+          script: ./gradlew --no-daemon --continue :app:connectedDebugAndroidTest :pnote-capacitor-pnote:connectedDebugAndroidTest
+      - uses: actions/upload-artifact@v4
+        with: { name: app-debug-apk, path: apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk }
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with: { name: android-test-reports, path: '**/build/reports/**', if-no-files-found: ignore }
+
+  ios:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - name: Select Xcode 16 or newer
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode_16*.app /Applications/Xcode_2*.app 2>/dev/null | sort -V | tail -1)"
+      - run: npm ci
+      - run: npm run build:mobile
+      - name: Pick an iPad simulator
+        id: sim
+        run: |
+          ID=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(x['udid'] for k in sorted(d, reverse=True) if 'iOS' in k for x in d[k] if x['name'].startswith('iPad')))")
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
+      - name: Plugin tests (Swift package)
+        working-directory: packages/capacitor-pnote
+        run: xcodebuild test -scheme PnoteCapacitorPnote -destination "id=${{ steps.sim.outputs.id }}" CODE_SIGNING_ALLOWED=NO | tail -50; exit ${PIPESTATUS[0]}
+      - name: App build (unsigned)
+        working-directory: apps/mobile/ios/App
+        run: xcodebuild build -project App.xcodeproj -scheme App -destination "id=${{ steps.sim.outputs.id }}" CODE_SIGNING_ALLOWED=NO | tail -50; exit ${PIPESTATUS[0]}

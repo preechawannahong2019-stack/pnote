@@ -18,7 +18,7 @@ async function nonWhite(page: Page): Promise<number> {
 
 async function importFile(page: Page, file: { name: string; mimeType: string; buffer: Buffer }) {
   const chooser = page.waitForEvent('filechooser');
-  await page.getByRole('button', { name: 'นำเข้าไฟล์' }).click();
+  await page.getByRole('button', { name: '⤓ นำเข้าไฟล์', exact: true }).click();
   await (await chooser).setFiles(file);
 }
 

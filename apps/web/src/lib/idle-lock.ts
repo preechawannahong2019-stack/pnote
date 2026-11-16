@@ -26,6 +26,7 @@ export function createIdleLock(timeoutMs: number, onLock: () => void, now: () =>
   reset();
   return {
     reset,
+    check,
     dispose(): void {
       if (timer) clearTimeout(timer);
       clearInterval(interval);

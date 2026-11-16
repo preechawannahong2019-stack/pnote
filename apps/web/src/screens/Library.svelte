@@ -7,6 +7,13 @@
   import Thumbnail from '../components/Thumbnail.svelte';
   import SearchResults from '../components/SearchResults.svelte';
   import ImportButton from '../components/ImportButton.svelte';
+  import CaptureDialog from '../components/CaptureDialog.svelte';
+  import IncomingPrompt from '../components/IncomingPrompt.svelte';
+  import BackupDialog from '../components/BackupDialog.svelte';
+  import RestoreDialog from '../components/RestoreDialog.svelte';
+  import { backupFileName, exportAll, exportDoc, importBackup, isBackupFile, runExport } from '../lib/backup-flow';
+  import { currentServices } from '../platform';
+  import type { CaptureResult } from '../platform/capture';
   import { importFile, makeImporter } from '../lib/import-export';
   import { searchLibrary, type SearchHit } from '@pnote/pdf/search';
 
@@ -15,11 +22,40 @@
   const blobs = new BlobStore(store);
   lib.cleanupOrphans().catch(() => {});
   const importer = makeImporter(lib, blobs, author);
+  let capturing = $state(false);
+
+  async function saveCapture(c: CaptureResult) {
+    importing = 'กำลังบันทึกหน้าเว็บ…';
+    try {
+      const meta = await importer.importWebCapture(c, folderId);
+      capturing = false;
+      await refresh();
+      openDoc = meta.id;
+    } finally {
+      importing = '';
+    }
+  }
   let importing = $state<string | null>(null);
   let dragOver = $state(false);
 
+  let backup = $state<null | { doc: DocumentMeta | null }>(null);
+  let restoring = $state<File | null>(null);
+  let pnoteInput = $state<HTMLInputElement>();
+
+  async function doBackup(password: string, how: 'save' | 'share') {
+    const exp = currentServices().exporter;
+    const target = backup?.doc ?? null;
+    const name = backupFileName(target ? target.title : author.name);
+    await runExport(exp, how, name, target ? exportDoc(lib, blobs, target.id, password, author)
+      : exportAll(lib, blobs, password, author, (d, t) => (importing = `กำลังสำรอง ${d}/${t} เอกสาร`)));
+    importing = null;
+    backup = null;
+  }
+
   async function importFiles(files: File[]) {
     error = '';
+    const backups = files.filter(isBackupFile);
+    if (backups.length) { restoring = backups[0]; files = files.filter((f) => !isBackupFile(f)); if (!files.length) return; }
     let lastOk: DocumentMeta | null = null;
     for (const f of files) {
       importing = `กำลังนำเข้า ${f.name}`;
@@ -66,9 +102,11 @@
   let newTemplate = $state<PageTemplate>('plain');
   let error = $state('');
 
+  let replaced = $state<DocumentMeta[]>([]);
   async function refresh() {
     folders = await lib.listFolders();
     docs = query.trim() ? await lib.searchByTitle(query) : await lib.listDocuments(folderId);
+    replaced = await lib.listReplaced();
   }
   $effect(() => { void folderId; void query; void openDoc; refresh(); });
 
@@ -112,6 +150,22 @@
   }
 </script>
 
+<IncomingPrompt incoming={currentServices().incoming} profileName={author.name} onImport={(f) => importFiles([f])} />
+{#if backup}
+  <BackupDialog heading={backup.doc ? `ส่งออก "${backup.doc.title}" เป็น .pnote` : 'สำรองโปรไฟล์ทั้งหมด'} canShare={currentServices().exporter.canShare}
+    onSubmit={doBackup} onCancel={() => (backup = null)} />
+{/if}
+{#if restoring}
+  <RestoreDialog file={restoring} run={(pw, choose) => importBackup(lib, blobs, restoring!, pw, author, choose)}
+    onDone={async (out) => { restoring = null; await refresh();
+      error = out.skipped.length ? `นำเข้าไม่ได้ ${out.skipped.length} เอกสาร เพราะข้อมูลไม่ตรงกับไฟล์สำรอง: ${out.skipped.join(', ')}`
+        : out.imported.length ? '' : 'ไม่มีเอกสารที่นำเข้าได้'; }} onCancel={() => (restoring = null)} />
+{/if}
+<input bind:this={pnoteInput} type="file" hidden accept=".pnote,application/x-pnote-backup" data-testid="pnote-input"
+  onchange={(e) => { const f = (e.currentTarget as HTMLInputElement).files?.[0]; (e.currentTarget as HTMLInputElement).value = ''; if (f) restoring = f; }} />
+{#if capturing}
+  <CaptureDialog capture={currentServices().capture} onCaptured={saveCapture} onCancel={() => (capturing = false)} />
+{/if}
 {#if openDoc}
   <Editor {lib} {blobs} {author} docId={openDoc} initialPage={openPage} highlight={query.trim()} onClose={() => { openDoc = null; openPage = 0; }} />
 {:else}
@@ -123,8 +177,11 @@
       </nav>
       <input class="search" type="search" placeholder="ค้นหาชื่อเอกสาร" aria-label="ค้นหาชื่อเอกสาร" bind:value={query} />
       <ImportButton busy={!!importing} onFiles={importFiles} />
+      <button onclick={() => (capturing = true)}>＋ บันทึกหน้าเว็บ</button>
       <button onclick={() => { dialog = 'folder'; newTitle = ''; }}>＋ โฟลเดอร์</button>
       <button class="primary" onclick={() => { dialog = 'notebook'; newTitle = 'สมุดใหม่'; }}>＋ สมุดใหม่</button>
+      <button onclick={() => pnoteInput?.click()}>นำเข้าไฟล์ .pnote</button>
+      <button onclick={() => (backup = { doc: null })}>สำรองโปรไฟล์ทั้งหมด</button>
       <button onclick={onLock}>🔒 ล็อก</button>
     </header>
 
@@ -151,6 +208,7 @@
           </button>
           <div class="actions">
             <button class="small" onclick={() => rename(d)}>เปลี่ยนชื่อ</button>
+            <button class="small" aria-label="ส่งออก {d.title} เป็น .pnote" onclick={() => (backup = { doc: d })}>ส่งออกเป็น .pnote</button>
             <select aria-label="ย้ายไปโฟลเดอร์" value={d.folderId ?? ''} onchange={(e) => move(d, (e.currentTarget as HTMLSelectElement).value)}>
               <option value="">ห้องสมุด</option>
               {#each folders as f (f.id)}<option value={f.id}>{f.name}</option>{/each}
@@ -159,6 +217,14 @@
         </div>
       {/each}
       {#if !childFolders.length && !docs.length}<p class="empty">ยังไม่มีเอกสาร</p>{/if}
+      {#if replaced.length && !query.trim() && folderId === null}
+        <details class="replaced">
+          <summary>ฉบับเดิมที่ถูกแทนที่ ({replaced.length})</summary>
+          {#each replaced as d (d.id)}
+            <button class="small" aria-label="เปิดฉบับเดิม {d.title}" onclick={() => (openDoc = d.id)}>{d.title}</button>
+          {/each}
+        </details>
+      {/if}
     </section>
   </div>
 

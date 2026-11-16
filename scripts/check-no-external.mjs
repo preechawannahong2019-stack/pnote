@@ -12,7 +12,8 @@ const ALLOW = [
   /^https?:\/\/(localhost|127\.0\.0\.1)/,
   /^https?:\/\/github\.com\/[\w-]+\/[\w.-]+\/?(issues|blob)?/i, // library error/license comments
   /^https?:\/\/www\.npmjs\.com\/package\//, // hash-wasm error message text (never fetched)
-  /^https?:\/\/(svelte\.dev|developer\.mozilla\.org|goo\.gl|bit\.ly|reactjs\.org)\//, // doc links in error messages
+  /^https?:\/\/(svelte\.dev|developer\.mozilla\.org|goo\.gl|bit\.ly|reactjs\.org|capacitorjs\.com)\//, // doc links in error messages
+  /^https:\/\/\$\{\w+\}$/, // web capture: a page address the user typed, given a scheme (opened only in the capture window)
 ];
 const URL_RE = /https?:\/\/[^\s"'`)<>\\]+/g;
 

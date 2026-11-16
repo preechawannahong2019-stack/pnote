@@ -89,6 +89,10 @@ export interface DocumentMeta {
   sourceUrl?: string;
   capturedAt?: number;
   originalName?: string;
+  /** id the document had on the device it was imported from (.pnote), when it had to take a new id here */
+  originId?: Id;
+  /** set when another imported copy replaced this one: hidden from the library, files kept */
+  replacedBy?: Id;
   importedAt?: number;
   pages: PageRef[];
   createdAt: number;
@@ -105,3 +109,9 @@ export const A4 = { widthPt: 595.28, heightPt: 841.89 } as const;
 export interface OcrWord { text: string; bbox: [number, number, number, number]; conf: number }
 /** Searchable text of one page: from the PDF's own text or from OCR. */
 export interface OcrPage { pageId: Id; engine: 'tesseract' | 'pdf-text'; lang: 'tha+eng'; words: OcrWord[]; doneAt: number }
+
+/** What was saved when a web page was captured, with the SHA-256 of each stored file (spec §8.5.1). */
+export interface CaptureRecord {
+  requestedUrl: string; finalUrl: string; capturedAt: number; timeZone: string; userAgent: string;
+  files: { name: 'page.pdf' | 'screenshot.png' | 'page.mht' | 'page.webarchive'; sha256: string; bytes: number }[];
+}
