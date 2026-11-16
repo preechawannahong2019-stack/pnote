@@ -15,7 +15,7 @@
   } = $props();
 
   let panel = $state<null | 'pen' | 'settings'>(null);
-  const tools: [ActiveTool, string, string][] = [['pen', '✏️', 'ปากกา'], ['highlighter', '🖍', 'ปากกาเน้นข้อความ'], ['eraser', '🧽', 'ยางลบ'], ['lasso', '➰', 'บ่วงบาศ']];
+  const tools: [ActiveTool, string, string][] = [['pen', '✏️', 'ปากกา'], ['highlighter', '🖍', 'ปากกาเน้นข้อความ'], ['eraser', '🧽', 'ยางลบ'], ['lasso', '➰', 'บ่วงบาศ'], ['text', 'T', 'กล่องข้อความ']];
   const docks: [Dock, string][] = [['top', 'บน'], ['bottom', 'ล่าง'], ['left', 'ซ้าย'], ['right', 'ขวา']];
   const vertical = $derived(p.tb.dock === 'left' || p.tb.dock === 'right');
 </script>

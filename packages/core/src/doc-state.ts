@@ -1,12 +1,15 @@
 import type { AuditAction } from './audit';
-import type { Id, PageRef, Shape, ShapeGeometry, Stroke } from './types';
+import type { Id, PageRef, Shape, ShapeGeometry, Stroke, TextBox } from './types';
 
 /** strokes and shapes are keyed by pageId */
 export interface DocState {
   pages: PageRef[];
   strokes: Record<Id, Stroke[]>;
   shapes: Record<Id, Shape[]>;
+  textBoxes: Record<Id, TextBox[]>;
 }
+
+export type TextPatch = Partial<Pick<TextBox, 'text' | 'x' | 'y' | 'w' | 'h' | 'sizePt' | 'color' | 'bold'>>;
 
 export type Command =
   | { type: 'addStroke'; stroke: Stroke }
@@ -16,7 +19,9 @@ export type Command =
   | { type: 'addShape'; shape: Shape }
   | { type: 'addPage'; page: PageRef; atIndex: number }
   | { type: 'removePage'; pageId: Id }
-  | { type: 'reorderPage'; pageId: Id; toIndex: number };
+  | { type: 'reorderPage'; pageId: Id; toIndex: number }
+  | { type: 'addTextBox'; box: TextBox }
+  | { type: 'editTextBox'; pageId: Id; id: Id; patch: TextPatch; updatedAt: number };
 
 export interface AuditRecord { action: AuditAction; objectIds: Id[] }
 
@@ -72,6 +77,7 @@ export function applyCommand(s: DocState, c: Command): DocState {
         ...s,
         strokes: { ...s.strokes, [c.pageId]: setHidden(s.strokes[c.pageId], ids, hidden) },
         shapes: { ...s.shapes, [c.pageId]: setHidden(s.shapes[c.pageId], ids, hidden) },
+        textBoxes: { ...s.textBoxes, [c.pageId]: setHidden(s.textBoxes?.[c.pageId], ids, hidden) },
       };
     }
     case 'moveObjects': {
@@ -85,6 +91,10 @@ export function applyCommand(s: DocState, c: Command): DocState {
         shapes: {
           ...s.shapes,
           [c.pageId]: (s.shapes[c.pageId] ?? []).map((x) => (ids.has(x.id) ? { ...x, geometry: moveGeometry(x.geometry, c.dx, c.dy) } : x)),
+        },
+        textBoxes: {
+          ...s.textBoxes,
+          [c.pageId]: (s.textBoxes?.[c.pageId] ?? []).map((x) => (ids.has(x.id) ? { ...x, x: x.x + c.dx, y: x.y + c.dy } : x)),
         },
       };
     }
@@ -106,6 +116,7 @@ export function applyCommand(s: DocState, c: Command): DocState {
         pages,
         strokes: { ...s.strokes, [c.page.id]: s.strokes[c.page.id] ?? [] },
         shapes: { ...s.shapes, [c.page.id]: s.shapes[c.page.id] ?? [] },
+        textBoxes: { ...s.textBoxes, [c.page.id]: s.textBoxes?.[c.page.id] ?? [] },
       };
     }
     case 'removePage':
@@ -116,12 +127,31 @@ export function applyCommand(s: DocState, c: Command): DocState {
       if (from < 0) return s;
       return { ...s, pages: moveIndex(s.pages, from, c.toIndex) };
     }
+    case 'addTextBox': {
+      const pid = c.box.pageId;
+      const list = s.textBoxes?.[pid] ?? [];
+      const exists = list.some((x) => x.id === c.box.id);
+      return { ...s, textBoxes: { ...s.textBoxes, [pid]: exists ? setHidden(list, new Set([c.box.id]), false) : [...list, c.box] } };
+    }
+    case 'editTextBox':
+      return {
+        ...s,
+        textBoxes: {
+          ...s.textBoxes,
+          [c.pageId]: (s.textBoxes?.[c.pageId] ?? []).map((x) => (x.id === c.id ? { ...x, ...c.patch, updatedAt: c.updatedAt } : x)),
+        },
+      };
   }
 }
 
-function splitIds(s: DocState, pageId: Id, ids: Id[]): { strokes: Id[]; shapes: Id[] } {
+function splitIds(s: DocState, pageId: Id, ids: Id[]): { strokes: Id[]; shapes: Id[]; texts: Id[] } {
   const shapeIds = new Set((s.shapes[pageId] ?? []).map((x) => x.id));
-  return { strokes: ids.filter((i) => !shapeIds.has(i)), shapes: ids.filter((i) => shapeIds.has(i)) };
+  const textIds = new Set((s.textBoxes?.[pageId] ?? []).map((x) => x.id));
+  return {
+    strokes: ids.filter((i) => !shapeIds.has(i) && !textIds.has(i)),
+    shapes: ids.filter((i) => shapeIds.has(i)),
+    texts: ids.filter((i) => textIds.has(i)),
+  };
 }
 
 /** Audit records describing what `c` does when applied to `before`. */
@@ -133,11 +163,12 @@ export function auditRecordsFor(before: DocState, c: Command): AuditRecord[] {
     }
     case 'hideObjects':
     case 'unhideObjects': {
-      const { strokes, shapes } = splitIds(before, c.pageId, c.ids);
+      const { strokes, shapes, texts } = splitIds(before, c.pageId, c.ids);
       const verb = c.type === 'hideObjects' ? 'hide' : 'unhide';
       const out: AuditRecord[] = [];
       if (strokes.length) out.push({ action: `stroke.${verb}`, objectIds: strokes });
       if (shapes.length) out.push({ action: `shape.${verb}`, objectIds: shapes });
+      if (texts.length) out.push({ action: `text.${verb}`, objectIds: texts });
       return out;
     }
     case 'moveObjects':
@@ -155,6 +186,12 @@ export function auditRecordsFor(before: DocState, c: Command): AuditRecord[] {
       return [{ action: 'page.remove', objectIds: [c.pageId] }];
     case 'reorderPage':
       return [{ action: 'page.reorder', objectIds: [c.pageId] }];
+    case 'addTextBox': {
+      const exists = (before.textBoxes?.[c.box.pageId] ?? []).some((x) => x.id === c.box.id);
+      return [{ action: exists ? 'text.unhide' : 'text.add', objectIds: [c.box.id] }];
+    }
+    case 'editTextBox':
+      return [{ action: 'text.edit', objectIds: [c.id] }];
   }
 }
 
@@ -166,7 +203,7 @@ export function invertCommand(before: DocState, c: Command): Command[] {
     case 'hideObjects':
     case 'unhideObjects': {
       const target = c.type === 'hideObjects';
-      const all = [...(before.strokes[c.pageId] ?? []), ...(before.shapes[c.pageId] ?? [])];
+      const all = [...(before.strokes[c.pageId] ?? []), ...(before.shapes[c.pageId] ?? []), ...(before.textBoxes?.[c.pageId] ?? [])];
       const changed = all.filter((o) => c.ids.includes(o.id) && Boolean(o.hidden) !== target).map((o) => o.id);
       if (!changed.length) return [];
       return [{ type: target ? 'unhideObjects' : 'hideObjects', pageId: c.pageId, ids: changed }];
@@ -189,6 +226,15 @@ export function invertCommand(before: DocState, c: Command): Command[] {
     case 'reorderPage': {
       const idx = before.pages.findIndex((p) => p.id === c.pageId);
       return idx < 0 ? [] : [{ type: 'reorderPage', pageId: c.pageId, toIndex: idx }];
+    }
+    case 'addTextBox':
+      return [{ type: 'hideObjects', pageId: c.box.pageId, ids: [c.box.id] }];
+    case 'editTextBox': {
+      const prev = (before.textBoxes?.[c.pageId] ?? []).find((x) => x.id === c.id);
+      if (!prev) return [];
+      const patch: TextPatch = {};
+      for (const k of Object.keys(c.patch) as (keyof TextPatch)[]) (patch as Record<string, unknown>)[k] = prev[k];
+      return [{ type: 'editTextBox', pageId: c.pageId, id: c.id, patch, updatedAt: prev.updatedAt }];
     }
   }
 }

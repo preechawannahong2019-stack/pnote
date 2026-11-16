@@ -10,7 +10,8 @@ function pagesTouched(c: Command): Id[] {
   switch (c.type) {
     case 'addStroke': return [c.stroke.pageId];
     case 'addShape': return [c.shape.pageId];
-    case 'hideObjects': case 'unhideObjects': case 'moveObjects': return [c.pageId];
+    case 'addTextBox': return [c.box.pageId];
+    case 'hideObjects': case 'unhideObjects': case 'moveObjects': case 'editTextBox': return [c.pageId];
     default: return [];
   }
 }

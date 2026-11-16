@@ -2,7 +2,7 @@ import { appendAudit, verifyAudit, type AuditEntry } from '@pnote/core/audit';
 import type { DocState } from '@pnote/core/doc-state';
 import { newId } from '@pnote/core/ids';
 import { decodePage, encodePage } from '@pnote/core/serialize';
-import { A4, type Author, type DocumentMeta, type Folder, type Id, type PageRef, type PageTemplate, type PenPreset } from '@pnote/core/types';
+import { A4, type Author, type DocumentMeta, type Folder, type Id, type OcrPage, type PageRef, type PageTemplate, type PenPreset } from '@pnote/core/types';
 import type { EncryptedStore } from './encrypted-store';
 
 export class FolderNotEmptyError extends Error {
@@ -26,6 +26,11 @@ export function blankPage(template: PageTemplate = 'plain'): PageRef {
 }
 
 const localQueues = new Map<string, Promise<unknown>>();
+/** Imports running in this tab (other tabs are seen through Web Locks). */
+const importsInFlight = new Set<string>();
+
+type Locks = LockManager | undefined;
+const webLocks = (): Locks => (globalThis.navigator as (Navigator & { locks?: LockManager }) | undefined)?.locks;
 
 export class Library {
   constructor(private store: EncryptedStore, private author: Author, private now: () => number = () => Date.now()) {}
@@ -54,6 +59,66 @@ export class Library {
     const meta = await this.store.getJSON<DocumentMeta>(`${docDir(id)}/meta.json`);
     if (!meta) throw new Error(`no document ${id}`);
     return meta;
+  }
+
+  get profileId(): Id { return this.store.profileId; }
+
+  /** Write the audit then the meta (last) of an imported document. */
+  async commitImport(meta: DocumentMeta, audit: AuditEntry[]): Promise<void> {
+    await this.store.putJSON(`${docDir(meta.id)}/audit.json`, audit);
+    await this.locked(() => this.putMeta(meta));
+  }
+
+  async removeDocumentFiles(id: Id): Promise<void> {
+    for (const p of await this.store.list(`${docDir(id)}/`)) await this.store.delete(p);
+  }
+
+  /** Hold the import lock of a document for the whole import so no tab mistakes it for an orphan. */
+  async withImportLock<T>(id: Id, fn: () => Promise<T>): Promise<T> {
+    const key = `${this.store.profileId}:${id}`;
+    importsInFlight.add(key);
+    try {
+      const locks = webLocks();
+      return locks ? ((await locks.request(`pnote-import-${key}`, fn)) as T) : await fn();
+    } finally {
+      importsInFlight.delete(key);
+    }
+  }
+
+  private async importRunning(id: Id): Promise<boolean> {
+    const key = `${this.store.profileId}:${id}`;
+    if (importsInFlight.has(key)) return true;
+    const locks = webLocks();
+    if (!locks) return false;
+    return (await locks.request(`pnote-import-${key}`, { ifAvailable: true }, async (lock) => lock === null)) as boolean;
+  }
+
+  /** Remove document folders without meta.json (imports interrupted before completion), skipping imports still running. */
+  async cleanupOrphans(): Promise<number> {
+    const ids = new Set<string>();
+    for (const p of await this.store.list('documents/')) ids.add(p.split('/')[1]);
+    let removed = 0;
+    for (const id of ids) {
+      if (await this.store.getJSON(`${docDir(id)}/meta.json`)) continue;
+      if (await this.importRunning(id)) continue;
+      await this.removeDocumentFiles(id);
+      removed++;
+    }
+    return removed;
+  }
+
+  getTextLayer(docId: Id, pageId: Id): Promise<OcrPage | null> {
+    return this.store.getJSON<OcrPage>(`${docDir(docId)}/text/${pageId}.json`);
+  }
+
+  putTextLayer(docId: Id, layer: OcrPage): Promise<void> {
+    return this.store.putJSON(`${docDir(docId)}/text/${layer.pageId}.json`, layer);
+  }
+
+  /** Page ids of a document that already have a text layer. */
+  async textLayerIds(docId: Id): Promise<Set<Id>> {
+    const prefix = `${docDir(docId)}/text/`;
+    return new Set((await this.store.list(prefix)).map((p) => p.slice(prefix.length, -'.json'.length)));
   }
 
   listFolders(): Promise<Folder[]> { return this.folders(); }
@@ -110,16 +175,17 @@ export class Library {
 
   async openDocument(id: Id): Promise<{ meta: DocumentMeta; state: DocState; audit: AuditEntry[]; auditOk: boolean }> {
     const meta = await this.getMeta(id);
-    const state: DocState = { pages: meta.pages, strokes: {}, shapes: {} };
-    for (const p of meta.pages) { state.strokes[p.id] = []; state.shapes[p.id] = []; }
+    const state: DocState = { pages: meta.pages, strokes: {}, shapes: {}, textBoxes: {} };
+    for (const p of meta.pages) { state.strokes[p.id] = []; state.shapes[p.id] = []; state.textBoxes[p.id] = []; }
     // load every page file, including pages removed from the document (data is never dropped)
     for (const path of await this.store.list(`${docDir(id)}/pages/`)) {
       const pageId = path.slice(path.lastIndexOf('/') + 1, -'.bin'.length);
       const bin = await this.store.getBytes(path);
       if (!bin) continue;
-      const { strokes, shapes } = decodePage(bin);
+      const { strokes, shapes, textBoxes } = decodePage(bin);
       state.strokes[pageId] = strokes;
       state.shapes[pageId] = shapes;
+      state.textBoxes[pageId] = textBoxes;
     }
     const audit = (await this.store.getJSON<AuditEntry[]>(`${docDir(id)}/audit.json`)) ?? [];
     const auditOk = (await verifyAudit(audit)).ok;
@@ -128,7 +194,7 @@ export class Library {
 
   async saveDocument(meta: DocumentMeta, state: DocState, audit: AuditEntry[], dirtyPageIds: Id[]): Promise<void> {
     for (const pid of dirtyPageIds) {
-      await this.store.putBytes(pagePath(meta.id, pid), encodePage(state.strokes[pid] ?? [], state.shapes[pid] ?? []));
+      await this.store.putBytes(pagePath(meta.id, pid), encodePage(state.strokes[pid] ?? [], state.shapes[pid] ?? [], state.textBoxes?.[pid] ?? []));
     }
     await this.store.putJSON(`${docDir(meta.id)}/audit.json`, audit);
     // re-read so a rename/move made elsewhere is not reverted; this save only owns pages

@@ -100,3 +100,32 @@ describe('PageRenderer', () => {
     expect(events(live).some((e) => e.type === 'clearRect')).toBe(true);
   });
 });
+
+describe('PageRenderer stage 2', () => {
+  const tb = (id: string, text: string, extra = {}) => ({ id, pageId: 'pg', x: 10, y: 10, w: 80, h: 20, text, font: 'sarabun' as const, sizePt: 12, color: '#000', bold: false, author: { profileId: 'p', name: 'A' }, createdAt: 1, updatedAt: 1, ...extra });
+
+  it('draws the background before strokes', () => {
+    const { base, live } = canvases();
+    const r = new PageRenderer(base, live);
+    const bg = document.createElement('canvas');
+    clear(base);
+    r.renderPage(page, [hline('a', 0, 10, 10)], [], [], bg);
+    const types = events(base).map((e) => e.type);
+    expect(types.indexOf('drawImage')).toBeGreaterThan(-1);
+    expect(types.indexOf('drawImage')).toBeLessThan(types.lastIndexOf('fill'));
+  });
+
+  it('draws text boxes with Sarabun, wraps long text, skips hidden', () => {
+    const { base, live } = canvases();
+    const r = new PageRenderer(base, live);
+    clear(base);
+    r.renderPage(page, [], [], [tb('t1', 'สั้น'), tb('t2', 'ข้อความยาวมาก '.repeat(10)), tb('t3', 'ซ่อน', { hidden: true })]);
+    const ev = events(base);
+    const fonts = ev.filter((e) => e.type === 'font').map((e) => String(e.props.value));
+    expect(fonts.some((f) => f.includes('Sarabun'))).toBe(true);
+    const texts = ev.filter((e) => e.type === 'fillText').map((e) => String(e.props.text));
+    expect(texts).toContain('สั้น');
+    expect(texts.filter((t) => t.includes('ข้อความ')).length).toBeGreaterThan(1);
+    expect(texts.join('')).not.toContain('ซ่อน');
+  });
+});

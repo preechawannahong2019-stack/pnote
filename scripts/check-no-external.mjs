@@ -4,6 +4,10 @@ import { join } from 'node:path';
 
 const DIST = new URL('../apps/web/dist/', import.meta.url).pathname;
 const ALLOW = [
+  // tesseract.js built-in CDN defaults: the app always passes local workerPath/corePath/langPath, and CSP blocks other origins
+  /^https:\/\/cdn\.jsdelivr\.net\/npm\/(tesseract\.js|tesseract\.js-core|@tesseract\.js-data)[@/]/,
+  // URL feature-detection literals in a bundled polyfill (never fetched)
+  /^https?:\/\/(a|x|foo\.bar|example\.com|тест|\$\{n\})([\/@#?]|$)/,
   /^https?:\/\/www\.w3\.org\//,      // XML/SVG namespaces
   /^https?:\/\/(localhost|127\.0\.0\.1)/,
   /^https?:\/\/github\.com\/[\w-]+\/[\w.-]+\/?(issues|blob)?/i, // library error/license comments

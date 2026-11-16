@@ -49,3 +49,8 @@ describe('scribbleTargets', () => {
     expect(scribbleTargets(zigzag(0, 40, 50, 5), [{ ...hline('a', 0, 40, 50), hidden: true }], [])).toEqual([]);
   });
 });
+
+it('scribble over a text box hides it', () => {
+  const box = { id: 't', pageId: 'pg', x: 0, y: 40, w: 40, h: 20, text: 'ก', font: 'sarabun' as const, sizePt: 12, color: '#000', bold: false, author: { profileId: 'p', name: 'A' }, createdAt: 1, updatedAt: 1 };
+  expect(scribbleTargets(zigzag(0, 40, 50, 5), [], [], [box])).toEqual(['t']);
+});

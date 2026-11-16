@@ -9,9 +9,10 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "npm run build -w apps/web",
+    "build": "node scripts/copy-assets.mjs && npm run build -w apps/web",
     "e2e": "playwright test -c apps/web",
-    "check:no-external": "node scripts/check-no-external.mjs"
+    "check:no-external": "node scripts/check-no-external.mjs",
+    "postinstall": "node scripts/copy-assets.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

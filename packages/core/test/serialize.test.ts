@@ -19,7 +19,7 @@ describe('page serialization', () => {
   });
 
   it('round-trips an empty page', () => {
-    expect(decodePage(encodePage([], []))).toEqual({ strokes: [], shapes: [] });
+    expect(decodePage(encodePage([], []))).toEqual({ strokes: [], shapes: [], textBoxes: [] });
   });
 
   it('handles a 5,000-point stroke', () => {
