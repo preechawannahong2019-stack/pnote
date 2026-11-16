@@ -26,6 +26,8 @@ final class CaptureTests: XCTestCase {
         web.navigationDelegate = delegate
         web.loadHTMLString("<html><head><meta name='viewport' content='width=device-width'></head><body style='margin:0;height:3000px;background:#ff0000'><h1>หลักฐาน</h1></body></html>", baseURL: nil)
         await fulfillment(of: [loaded], timeout: 120)
+        // contentSize settles asynchronously after didFinish (a user taps "save" much later)
+        for _ in 0..<100 where web.scrollView.contentSize.height < 3000 { try await Task.sleep(nanoseconds: 100_000_000) }
         let pdf = CaptureRender.pdf(of: web)
         XCTAssertEqual(String(data: pdf.prefix(5), encoding: .ascii), "%PDF-")
         let png = try await CaptureRender.screenshot(of: web)
