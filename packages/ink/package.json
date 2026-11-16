@@ -1,0 +1,14 @@
+{
+  "name": "@pnote/ink",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@pnote/core": "*",
+    "perfect-freehand": "^1.2.3"
+  }
+}

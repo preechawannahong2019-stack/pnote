@@ -1,0 +1,14 @@
+{
+  "name": "@pnote/storage",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "hash-wasm": "^4.13.0",
+    "@pnote/core": "*"
+  }
+}
